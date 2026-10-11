@@ -1,0 +1,15 @@
+/target
+
+# OS and editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Local secrets and logs
+.env
+.env.*
+!.env.example
+*.log
