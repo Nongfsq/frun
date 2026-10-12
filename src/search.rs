@@ -25,7 +25,8 @@ const STARTERS: [&str; 6] = [
 /// 按相关度排序。空查询时列出最常用的程序。
 ///
 /// 一个程序目录只占一行：目录里的其他程序收在主程序后面。
-/// 输入只对上其中一个时直接给出那一个；对上好几个时给出主程序。用过的不再收起。
+/// 输入只对上其中一个时直接给出那一个；好几个都以输入开头时给出主程序（vbox -> VirtualBox）；
+/// 其余情况给出对得最好的那一个。用过的不再收起。
 pub fn run(index: &Index, store: &Store, query: &str, max: usize) -> Vec<Hit> {
     let q: Vec<char> = query.trim().to_lowercase().chars().collect();
     let pick = store.picks.get(&q.iter().collect::<String>());
@@ -45,8 +46,7 @@ pub fn run(index: &Index, store: &Store, query: &str, max: usize) -> Vec<Hit> {
         let picked = pick.is_some_and(|t| g.members.iter().any(|m| &m.target == t));
         let hit = (score + used * 5 + if picked { 5000 } else { 0 } - buried(g.entry()), gi, marks);
         match g.owner {
-            // 档次：前缀、词首、子串、子序列各差 200 分
-            Some(owner) if used == 0 => behind.entry(owner).or_default().push(((score + 99) / 200, hit)),
+            Some(owner) if used == 0 => behind.entry(owner).or_default().push((class(score), hit)),
             _ => hits.push(hit),
         }
     }
@@ -55,14 +55,16 @@ pub fn run(index: &Index, store: &Store, query: &str, max: usize) -> Vec<Hit> {
         if shown.contains(&owner) {
             continue;
         }
-        // 最好的那一档只有一个：输入指的就是它。有好几个：给出主程序
         let top = list.iter().map(|h| h.0).max().unwrap_or(0);
         list.retain(|h| h.0 == top);
-        if list.len() == 1 {
-            hits.push(list.remove(0).1);
+        // 分数高的在前，同分时名字短的在前
+        list.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.1.1.cmp(&b.1.1)));
+        if list.len() > 1 && top == PREFIX {
+            // 一家子都以输入开头：要的多半是这个程序本身
+            hits.push((list[0].1.0 - 1, owner, Vec::new()));
         } else {
-            let best = list.iter().map(|h| h.1.0).max().unwrap_or(0);
-            hits.push((best - 1, owner, Vec::new()));
+            // 否则给出对得最好的那一个，名字和输入对得上
+            hits.push(list.remove(0).1);
         }
     }
     // 一次都没用过：列出这台电脑上最可能要开的几个系统程序
@@ -82,6 +84,17 @@ pub fn run(index: &Index, store: &Store, query: &str, max: usize) -> Vec<Hit> {
         .map(|(_, group, marks)| Hit { group, marks, extra: index.folded(group, store).count() })
         .collect()
 }
+
+/// 匹配的档次：前缀 3、词首 2、子串 1、子序列 0。
+fn class(score: i32) -> i32 {
+    match score {
+        900.. => PREFIX,
+        700.. => 2,
+        500.. => 1,
+        _ => 0,
+    }
+}
+const PREFIX: i32 = 3;
 
 /// 这一组对不对得上输入：分数，以及显示名里哪些字符命中。
 pub fn matched(g: &Group, q: &[char]) -> Option<(i32, Vec<bool>)> {
@@ -226,8 +239,8 @@ mod tests {
 
     #[test]
     fn a_program_folder_takes_one_row() {
-        let mut ix = index(&["VirtualBox", "VBoxManage", "VBoxSDS", "Blender"]);
-        for helper in [1, 2] {
+        let mut ix = index(&["VirtualBox", "VBoxManage", "VBoxSDS", "Blender", "latex-git-log", "mk-git-x"]);
+        for helper in [1, 2, 4, 5] {
             ix.groups[helper].members[0].owner = "VirtualBox".into();
         }
         ix.link();
@@ -235,7 +248,9 @@ mod tests {
         // 对上好几个：给出主程序，带着收起的数量
         let hits = run(&ix, &store, "vbox", 8);
         assert_eq!(hits.len(), 1);
-        assert_eq!((hits[0].group, hits[0].extra), (0, 2));
+        assert_eq!((hits[0].group, hits[0].extra), (0, 4));
+        // 对上好几个但都不是以输入开头：给出对得最好的那一个，而不是名字对不上的主程序
+        assert_eq!(names(&ix, &store, "git"), ["mk-git-x"]);
         // 只对上一个：直接给出它
         assert_eq!(names(&ix, &store, "vboxm"), ["VBoxManage"]);
         // 主程序自己对上了：其余不再单列
