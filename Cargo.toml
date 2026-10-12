@@ -7,23 +7,43 @@ description = "极简 Windows 程序启动器"
 [dependencies]
 pinyin = { version = "0.11", default-features = false, features = ["plain"] }
 serde = { version = "1", features = ["derive"] }
-toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "display"] }
+windows-core = "0.62"
+windows-numerics = "0.3"
+
+[build-dependencies]
+embed-resource = "3"
 
 [dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
+    "Win32_System_IO",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
     "Win32_System_Registry",
+    "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_UI_Controls",
     "Win32_UI_HiDpi",
+    "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ]
 
