@@ -32,6 +32,9 @@ const TIMER_FRAME: usize = 1;
 const TIMER_DIRTY: usize = 2;
 const TIMER_CARET: usize = 3;
 const TIMER_TRIM: usize = 4;
+const TIMER_REST: usize = 5;
+/// 收起多久之后把绘图资源整个放掉（毫秒）。再呼出时重建，多花几十毫秒
+const REST_AFTER: u32 = 60_000;
 
 // 设计稿里的尺寸，逻辑像素
 const CORNERS: [&str; 3] = ["square", "small", "round"];
@@ -553,6 +556,7 @@ impl App {
         self.anims.set(ID_PRESS, 0.0);
         self.anims.set(ID_OPEN, 0.0);
         self.visible = true;
+        self.wake_gfx();
         self.place(true);
         unsafe {
             let _ = SetForegroundWindow(self.hwnd);
@@ -601,6 +605,14 @@ impl App {
         // 收起一会儿后把用不到的内存页还给系统；马上又呼出的话就不折腾
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_TRIM, 3000, None);
+            SetTimer(Some(self.hwnd), TIMER_REST, REST_AFTER, None);
+        }
+    }
+
+    /// 绘图资源在长时间收起后会被放掉；要画之前确保它在。
+    pub fn wake_gfx(&mut self) {
+        if self.gfx.is_none() {
+            self.gfx = Gfx::new().ok();
         }
     }
 
@@ -1231,12 +1243,31 @@ impl App {
         self.flash_until = Some(Instant::now() + Duration::from_secs(5));
     }
 
+    /// 不再查选中程序所在的文件夹。和"不再显示"记在同一张表里，同样可以撤销和找回。
+    pub fn exclude_folder(&mut self, i: usize) {
+        let Some(row) = self.rows.get(i) else { return };
+        let entry = &self.index.groups[row.group].members[row.member];
+        let Some(dir) = excludable(entry) else { return };
+        let name = dir.to_string();
+        let item = (format!("{dir}\\"), dir.to_string(), String::new());
+        self.store.hidden.push(item.clone());
+        self.store.save();
+        self.last_hidden = vec![item];
+        self.index = index::load(&self.store);
+        self.expanded = None;
+        self.error = None;
+        self.requery();
+        self.flash = self.s.hidden_flash.replace("{name}", &name);
+        self.flash_until = Some(Instant::now() + Duration::from_secs(5));
+    }
+
     fn undo_hide(&mut self) {
         if self.last_hidden.is_empty() {
             return;
         }
         let back = std::mem::take(&mut self.last_hidden);
         self.store.hidden.retain(|h| !back.contains(h));
+        self.rescan_restored(&back);
         self.unhide();
         self.flash.clear();
         self.flash_until = None;
@@ -1244,9 +1275,19 @@ impl App {
 
     fn restore(&mut self, i: usize) {
         if i < self.store.hidden.len() {
-            self.store.hidden.remove(i);
+            let back = [self.store.hidden.remove(i)];
+            self.rescan_restored(&back);
             self.unhide();
             self.set_sel = self.set_sel.min(self.srows().len() - 1);
+        }
+    }
+
+    /// 找回的是文件夹时，里面的程序可能已经不在索引里了：重查这个文件夹。
+    fn rescan_restored(&mut self, back: &[(String, String, String)]) {
+        let dirs: Vec<String> = back.iter().filter(|h| h.0.ends_with('\\')).map(|h| h.1.clone()).collect();
+        if !dirs.is_empty() {
+            self.store.save();
+            self.scan_only(&dirs);
         }
     }
 
@@ -1732,6 +1773,13 @@ impl App {
                     self.caret_on = !self.caret_on;
                     self.invalidate();
                 }
+                TIMER_REST => unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_REST);
+                    if !self.visible && !self.menu.is_open() {
+                        self.gfx = None;
+                        let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+                    }
+                },
                 TIMER_TRIM => unsafe {
                     let _ = KillTimer(Some(self.hwnd), TIMER_TRIM);
                     if !self.visible {
@@ -1909,10 +1957,17 @@ pub fn source_label<'a>(s: &'a Strings, e: &'a index::Entry) -> &'a str {
     match e.kind {
         Kind::Start => &s.src_start,
         Kind::Store => &s.src_store,
-        Kind::Dir => &e.workdir,
+        Kind::Dir | Kind::Skip => &e.workdir,
     }
 }
 
+
+/// 可以整个不再查的文件夹：目录里扫出来的程序所在的文件夹，但不能是加进来的目录本身。
+pub fn excludable(e: &index::Entry) -> Option<&str> {
+    let dir = e.workdir.trim_end_matches(['\\', '/']);
+    let root = e.root.trim_end_matches(['\\', '/']);
+    (e.kind == Kind::Dir && !dir.eq_ignore_ascii_case(root)).then_some(dir)
+}
 
 /// 程序所在的位置：快捷方式和开始菜单项给出它们指向的真实文件；商店应用没有。
 pub fn location(e: &index::Entry) -> Option<String> {

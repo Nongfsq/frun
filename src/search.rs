@@ -116,15 +116,13 @@ pub fn matched(g: &Group, q: &[char]) -> Option<(i32, Vec<bool>)> {
     Some((score, marks))
 }
 
-/// 目录里埋得越深的文件越靠后，命令行工具再靠后：
-/// 同样匹配时，系统里装好的程序和放在目录浅处、带窗口的工具优先。
+/// 目录里埋得越深的文件越靠后：同样匹配时，系统里装好的程序和放在目录浅处的工具优先。
 fn buried(e: &Entry) -> i32 {
     if e.kind != Kind::Dir {
         return 0;
     }
     let levels = |s: &str| s.matches(['\\', '/']).count() as i32;
-    let depth = (levels(&e.target) - levels(e.root.trim_end_matches(['\\', '/'])) - 1).clamp(0, 6);
-    depth * 20 + if e.console { 150 } else { 0 }
+    (levels(&e.target) - levels(e.root.trim_end_matches(['\\', '/'])) - 1).clamp(0, 6) * 20
 }
 
 /// 前缀 > 词首 > 子串 > 子序列。返回分数和命中的键内位置；None 表示不匹配。

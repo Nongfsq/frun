@@ -27,6 +27,7 @@ enum Cmd {
     Admin,
     Folder,
     Hide,
+    Exclude,
 }
 
 #[derive(Default)]
@@ -44,6 +45,10 @@ pub struct Menu {
 
 impl Menu {
     /// 结果行的菜单开着：面板此时不响应鼠标，也不因失去焦点而收起。
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn on_row(&self) -> bool {
         self.open && self.row.is_some()
     }
@@ -78,6 +83,9 @@ impl App {
             items.push((self.s.menu_folder.clone(), "Ctrl ↵", Cmd::Folder));
         }
         items.push((self.s.menu_hide.clone(), "Ctrl Del", Cmd::Hide));
+        if excludable(entry).is_some() {
+            items.push((self.s.menu_exclude.clone(), "", Cmd::Exclude));
+        }
         self.sel = i;
         let at = at.unwrap_or_else(|| {
             let mut rc = RECT::default();
@@ -139,6 +147,7 @@ impl App {
             },
         };
         self.refresh_theme();
+        self.wake_gfx();
         // 宽度跟着最长的一项走
         let mut width = WIDTH;
         if let Some(g) = &mut self.gfx {
@@ -213,6 +222,7 @@ impl App {
                 self.sel = row;
                 self.hide_selected();
             }
+            Cmd::Exclude => self.exclude_folder(row),
         }
         self.invalidate();
     }

@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod doctor;
 mod gfx;
 mod i18n;
 mod index;
@@ -18,6 +19,8 @@ fn main() {
         scan::run(&args[1..]);
     } else if args.first().is_some_and(|a| a == "--icons") {
         scan::run_icons(&args[1..]);
+    } else if args.first().is_some_and(|a| a == "--doctor") {
+        doctor::run(&args[1..]);
     } else if args.first().is_some_and(|a| a == "--pick") {
         pick(args.get(1).and_then(|a| a.parse::<isize>().ok()).unwrap_or(0));
     } else {

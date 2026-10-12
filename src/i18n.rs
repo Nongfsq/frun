@@ -18,7 +18,7 @@ strings!(
     file_types, add_ext, path_hint, drop_here, indexed, reindexing, no_match, finding, first_index,
     updating, updated, up_to_date, src_start, src_store, tag_new, tag_current, admin_enter,
     err_missing, err_failed, tray_settings, tray_quit, add_dir, hidden, hidden_flash,
-    tray_reindex, admin, menu_open, menu_folder, menu_hide,
+    tray_reindex, admin, menu_open, menu_folder, menu_hide, menu_exclude,
 );
 
 const ZH: &str = include_str!("../locales/zh-CN.toml");

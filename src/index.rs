@@ -15,6 +15,9 @@ pub enum Kind {
     Store,
     /// 用户指定目录里的文件
     Dir,
+    /// 目录里扫到但不收的文件（程序目录里的命令行工具和脚本）。
+    /// 只留在索引文件里给扫描进程看，免得每次重读文件头；主进程不读它
+    Skip,
 }
 
 impl Kind {
@@ -23,6 +26,7 @@ impl Kind {
             Kind::Start => "s",
             Kind::Store => "u",
             Kind::Dir => "d",
+            Kind::Skip => "x",
         }
     }
 
@@ -31,6 +35,7 @@ impl Kind {
             "s" => Some(Kind::Start),
             "u" => Some(Kind::Store),
             "d" => Some(Kind::Dir),
+            "x" => Some(Kind::Skip),
             _ => None,
         }
     }
@@ -204,8 +209,15 @@ pub fn icon_dir(px: u32) -> PathBuf {
     config::cache_dir().join("icons").join(px.to_string())
 }
 
-/// 索引文件里的全部条目，不分组。
+/// 索引里要显示的条目，不分组。
 pub fn read() -> Vec<Entry> {
+    let mut all = read_all();
+    all.retain(|e| e.kind != Kind::Skip);
+    all
+}
+
+/// 索引文件里的全部条目，包括扫到但不收的。
+pub fn read_all() -> Vec<Entry> {
     let text = fs::read_to_string(index_path()).unwrap_or_default();
     text.lines()
         .filter_map(|line| {
@@ -234,7 +246,13 @@ pub fn load(store: &Store) -> Index {
             Some((f.next()?.to_string(), f.next()?.to_string(), f.next()?.parse().ok()?))
         })
         .collect();
-    let mut index = Index { groups: group(entries.filter(|e| !store.is_hidden(&e.target))), found };
+    let dirs = store.hidden_dirs();
+    let inside = |e: &Entry| {
+        let at = e.workdir.to_lowercase();
+        dirs.iter().any(|d| at.strip_prefix(d.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('\\')))
+    };
+    let shown = entries.filter(|e| !store.is_hidden(&e.target) && !(e.kind == Kind::Dir && inside(e)));
+    let mut index = Index { groups: group(shown), found };
     index.link();
     index.choose_all(store);
     index

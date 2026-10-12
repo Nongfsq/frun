@@ -157,7 +157,8 @@ pub struct Store {
     pub usage: HashMap<String, u32>,
     pub picks: HashMap<String, String>,
     pub prefer: HashSet<String>,
-    /// 用户选择不再显示的程序：(启动目标, 名称, 来源)
+    /// 用户选择不再显示的程序：(启动目标, 名称, 来源)。
+    /// 启动目标以反斜杠结尾的是一整个不再查的文件夹
     pub hidden: Vec<(String, String, String)>,
 }
 
@@ -184,6 +185,15 @@ impl Store {
                 })
                 .collect(),
         }
+    }
+
+    /// 不再查的文件夹：小写、不带结尾的反斜杠。
+    pub fn hidden_dirs(&self) -> Vec<String> {
+        self.hidden
+            .iter()
+            .filter(|(t, _, _)| t.ends_with('\\'))
+            .map(|(t, _, _)| t.trim_end_matches('\\').to_lowercase())
+            .collect()
     }
 
     pub fn is_hidden(&self, target: &str) -> bool {

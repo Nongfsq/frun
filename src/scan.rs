@@ -43,6 +43,9 @@ fn progress(n: usize) {
 const LAUNCHABLE: &[&str] =
     &["exe", "lnk", "bat", "cmd", "ps1", "py", "msc", "com", "vbs", "ahk", "jar", "appref-ms", "url"];
 
+/// 脚本类型：在程序目录里时算作程序自带的辅助文件。
+const SCRIPTS: &[&str] = &[".bat", ".cmd", ".ps1", ".py", ".vbs", ".jar"];
+
 const PKEY_LINK_TARGET: PROPERTYKEY =
     PROPERTYKEY { fmtid: GUID::from_u128(0xb9b4b3fc_2b51_4a42_b5d8_324146afcf25), pid: 2 };
 const PKEY_LINK_ARGUMENTS: PROPERTYKEY =
@@ -57,6 +60,7 @@ pub fn run(args: &[String]) {
     let hwnd = args.first().and_then(|a| a.parse::<isize>().ok()).unwrap_or(0);
     let px = args.get(1).and_then(|a| a.parse::<u32>().ok()).unwrap_or(32).clamp(16, 256);
     let force = args.get(2).is_some_and(|a| a == "force");
+    let began = std::time::Instant::now();
     let notify = |msg: u32| unsafe {
         if hwnd != 0 {
             let _ = PostMessageW(Some(HWND(hwnd as _)), msg, WPARAM(0), LPARAM(0));
@@ -69,7 +73,7 @@ pub fn run(args: &[String]) {
     let cfg = config::load();
     // 只查指定的几处：目录里刚有变化的子目录，或 "apps"（系统应用列表）。其余沿用上一次的结果
     let only: Vec<String> = args.iter().skip(2).filter(|a| *a != "force").cloned().collect();
-    let old = index::read();
+    let old = index::read_all();
     let partial = !only.is_empty() && !old.is_empty();
     // 有没有窗口要读文件头才知道；上次读过的不再读
     let known: HashMap<String, bool> = fs::read_to_string(index::index_path())
@@ -80,6 +84,16 @@ pub fn run(args: &[String]) {
             matches!(f.get(7), Some(&"c") | Some(&"g")).then(|| (f[2].to_lowercase(), f[7] == "c"))
         })
         .collect();
+    let store = config::Store::load();
+    // 上次完整扫描记下的空子树：里面一个可启动的文件都没有，这次不再进去
+    let signature = format!("{}|{}", cfg.dirs.join(";"), cfg.exts.join(","));
+    let (stamp, old_signature, mut barren) = read_barren();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    // 彻底查一遍并重新记：手动刷新、目录或类型变了、或者距上次已经过了几天
+    let deep = !partial && (force || old_signature != signature || now.saturating_sub(stamp) > RECHECK);
+    // 用户说了不再查的文件夹，任何时候都不进去
+    let mut skip: HashSet<String> = store.hidden_dirs().into_iter().collect();
+    let mut seen_dirs = Vec::new();
     let mut entries = Vec::new();
     let mut found = BTreeMap::new();
     if partial {
@@ -88,29 +102,56 @@ pub fn run(args: &[String]) {
         entries = old
             .into_iter()
             .filter(|e| match e.kind {
-                Kind::Dir => root_of(&e.workdir).is_some() && !only.iter().any(|p| under(&e.workdir, p)),
+                Kind::Dir | Kind::Skip => {
+                    root_of(&e.workdir).is_some() && !only.iter().any(|p| under(&e.workdir, p))
+                }
                 _ => !apps_too,
             })
             .collect();
         for path in &only {
             if let Some(root) = root_of(path) {
-                walk(Path::new(path), root, &cfg.exts, &known, &mut entries, &mut found);
+                walk(Path::new(path), root, &cfg.exts, &known, &skip, None, &mut entries, &mut found);
             }
         }
         if apps_too {
             let _ = unsafe { apps(&mut entries) };
         }
+        // 变化发生在记为空的子树里：它不再是空的了
+        let before = barren.len();
+        barren.retain(|b| !only.iter().any(|p| under(p, b)));
+        if barren.len() != before {
+            write_barren(stamp, &old_signature, &barren);
+        }
     } else {
+        if !deep {
+            skip.extend(barren);
+        }
         for dir in &cfg.dirs {
-            walk(Path::new(dir), dir, &cfg.exts, &known, &mut entries, &mut found);
+            let record = deep.then_some(&mut seen_dirs);
+            walk(Path::new(dir), dir, &cfg.exts, &known, &skip, record, &mut entries, &mut found);
         }
         let _ = unsafe { apps(&mut entries) };
+        if deep {
+            write_barren(now, &signature, &barren_of(&seen_dirs));
+        }
     }
     let mut seen = HashSet::new();
     entries.retain(|e| seen.insert(e.target.to_lowercase()));
+    // 上次没收的这次重新判断：它所在的程序目录可能变了。
+    // 命令行程序只在终端里用，没有人会从启动器里打开：一律不收，也不参与认主程序
+    for e in entries.iter_mut().filter(|e| matches!(e.kind, Kind::Dir | Kind::Skip)) {
+        e.kind = if e.console { Kind::Skip } else { Kind::Dir };
+    }
     // 目录里的排前面并按路径排序，结果与扫描的先后无关
     entries.sort_by_cached_key(|e| (e.kind != Kind::Dir, if e.kind == Kind::Dir { e.target.to_lowercase() } else { String::new() }));
     fold(&mut entries);
+    // 程序目录里收在主程序后面的脚本是程序自带的辅助文件：也不收。自己放的零散脚本照常收
+    for e in entries.iter_mut() {
+        let script = SCRIPTS.iter().any(|x| e.target.to_lowercase().ends_with(x));
+        if e.kind == Kind::Dir && !e.owner.is_empty() && script {
+            e.kind = Kind::Skip;
+        }
+    }
 
     let clean = |s: &str| s.replace(['\t', '\r', '\n'], " ");
     let text: String = entries
@@ -128,7 +169,7 @@ pub fn run(args: &[String]) {
                 // c 命令行，g 带窗口；空表示没读过文件头
                 if e.console {
                     "c"
-                } else if e.kind == Kind::Dir && e.target.to_lowercase().ends_with(".exe") {
+                } else if e.kind != Kind::Start && e.kind != Kind::Store && e.target.to_lowercase().ends_with(".exe") {
                     "g"
                 } else {
                     ""
@@ -144,11 +185,21 @@ pub fn run(args: &[String]) {
         write_atomic(&index::found_path(), found.as_bytes());
     }
     notify(WM_INDEX);
+    let count = |k: Kind| entries.iter().filter(|e| e.kind == k).count();
+    log(&format!(
+        "scan {} {} ms: folders {} kept {} skipped, start {} store {}{}",
+        if partial { "partial" } else if deep { "deep" } else { "quick" },
+        began.elapsed().as_millis(),
+        count(Kind::Dir),
+        count(Kind::Skip),
+        count(Kind::Start),
+        count(Kind::Store),
+        if partial { format!(" [{}]", only.join(", ")) } else { String::new() }
+    ));
 
     // 常用的排前面：它们最先被看到。目录里扫出来的可能成千上万，没用过的等显示到时再取
-    let store = config::Store::load();
     let used = |e: &Entry| store.usage.get(&e.target).copied().unwrap_or(0);
-    entries.retain(|e| e.kind != Kind::Dir || used(e) > 0);
+    entries.retain(|e| e.kind != Kind::Skip && (e.kind != Kind::Dir || used(e) > 0));
     entries.sort_by_key(|e| std::cmp::Reverse(used(e)));
     let targets: Vec<String> = entries.into_iter().map(|e| e.target).collect();
     icons(&targets, px, force);
@@ -221,9 +272,12 @@ fn walk(
     root: &str,
     exts: &[String],
     known: &HashMap<String, bool>,
+    skip: &HashSet<String>,
+    record: Option<&mut Vec<(String, bool)>>,
     out: &mut Vec<Entry>,
     found: &mut BTreeMap<(String, String), usize>,
 ) {
+    let recording = record.is_some();
     use std::os::windows::fs::MetadataExt;
     use std::sync::{
         Mutex,
@@ -232,7 +286,7 @@ fn walk(
     let queue = Mutex::new(vec![PathBuf::from(start)]);
     let pending = AtomicUsize::new(1);
     let total = AtomicUsize::new(out.len());
-    let results = Mutex::new((Vec::new(), BTreeMap::<String, usize>::new()));
+    let results = Mutex::new((Vec::new(), BTreeMap::<String, usize>::new(), Vec::new()));
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8);
     std::thread::scope(|scope| {
         for _ in 0..workers {
@@ -242,6 +296,9 @@ fn walk(
                 }
                 let mut mine = Vec::new();
                 let mut counts = BTreeMap::<String, usize>::new();
+                // 走过的目录和它里面有没有可启动的文件，用来找出空子树
+                let mut walked: Vec<(String, bool)> = Vec::new();
+                let key = |p: &Path| p.to_string_lossy().trim_end_matches('\\').to_lowercase();
                 loop {
                     let next = queue.lock().unwrap().pop();
                     let Some(dir) = next else {
@@ -262,7 +319,10 @@ fn walk(
                             let hidden = entry.metadata().is_ok_and(|m| m.file_attributes() & 2 != 0);
                             // 链接和挂载点不跟进去，避免绕圈
                             if !kind.is_symlink() && !hidden && !skip_dir(name) {
-                                subdirs.push(entry.path());
+                                let path = entry.path();
+                                if skip.is_empty() || !skip.contains(&key(&path)) {
+                                    subdirs.push(path);
+                                }
                             }
                         } else if name == CACHE_TAG {
                             cache = true;
@@ -273,6 +333,9 @@ fn walk(
                                 files.push((entry.path(), stem.to_string(), ext));
                             }
                         }
+                    }
+                    if recording {
+                        walked.push((key(&dir), !cache && !files.is_empty()));
                     }
                     if !cache {
                         for (path, stem, ext) in files {
@@ -306,21 +369,100 @@ fn walk(
                 }
                 let mut all = results.lock().unwrap();
                 all.0.append(&mut mine);
+                all.2.append(&mut walked);
                 for (ext, n) in counts {
                     *all.1.entry(ext).or_default() += n;
                 }
             });
         }
     });
-    let (mut entries, counts) = results.into_inner().unwrap();
+    let (mut entries, counts, mut walked) = results.into_inner().unwrap();
     out.append(&mut entries);
+    if let Some(record) = record {
+        record.append(&mut walked);
+    }
     for (ext, n) in counts {
         *found.entry((root.to_string(), ext)).or_default() += n;
     }
 }
 
+pub fn log_path() -> PathBuf {
+    config::cache_dir().join("frun.log")
+}
+
+/// 往日志里记一行（带 UTC 时间）。日志只留最近的一段，供 `--doctor` 附在报告里。
+pub fn log(line: &str) {
+    use std::io::Write;
+    let path = log_path();
+    if fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024)
+        && let Ok(text) = fs::read_to_string(&path)
+    {
+        let keep = text.len() / 2;
+        let from = text[keep..].find('\n').map_or(keep, |i| keep + i + 1);
+        let _ = fs::write(&path, &text[from..]);
+    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    // 从 1970 年起的天数换成年月日
+    let (days, rest) = ((secs / 86400) as i64 + 719_468, secs % 86400);
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let (day, month) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+    let year = yoe + era * 400 + (month <= 2) as i64;
+    let stamp = format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}Z", rest / 3600, rest % 3600 / 60, rest % 60);
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{stamp} {line}");
+    }
+}
+
+/// 空子树多久彻底核对一次（秒）。期间靠目录监视发现里面新出现的程序。
+const RECHECK: u64 = 3 * 24 * 3600;
+
+fn barren_path() -> PathBuf {
+    config::cache_dir().join("barren.tsv")
+}
+
+/// (记录时间, 当时的目录与类型, 空子树的根)
+pub fn read_barren() -> (u64, String, Vec<String>) {
+    let text = fs::read_to_string(barren_path()).unwrap_or_default();
+    let mut lines = text.lines();
+    let (stamp, signature) = lines.next().and_then(|l| l.split_once('\t')).unwrap_or(("0", ""));
+    (stamp.parse().unwrap_or(0), signature.to_string(), lines.map(str::to_string).collect())
+}
+
+fn write_barren(stamp: u64, signature: &str, dirs: &[String]) {
+    let mut text = format!("{stamp}\t{signature}\n");
+    for d in dirs {
+        text.push_str(d);
+        text.push('\n');
+    }
+    write_atomic(&barren_path(), text.as_bytes());
+}
+
+/// 从走过的目录里找出空子树的根：自己和所有下级都没有可启动的文件，而上一级有。
+fn barren_of(walked: &[(String, bool)]) -> Vec<String> {
+    let up = |d: &str| d.rsplit_once('\\').map(|(p, _)| p.to_string());
+    let mut live: HashSet<String> = HashSet::new();
+    for (dir, hit) in walked {
+        let mut at = Some(dir.clone());
+        while let Some(d) = at.take_if(|_| *hit) {
+            at = up(&d);
+            if !live.insert(d) {
+                break;
+            }
+        }
+    }
+    walked
+        .iter()
+        .filter(|(d, _)| !live.contains(d) && up(d).is_some_and(|p| live.contains(&p)))
+        .map(|(d, _)| d.clone())
+        .collect()
+}
+
 /// `path` 是不是在 `base` 里面（或就是它）。
-fn under(path: &str, base: &str) -> bool {
+pub fn under(path: &str, base: &str) -> bool {
     let (path, base) = (path.to_lowercase(), base.trim_end_matches(['\\', '/']).to_lowercase());
     path.strip_prefix(&base).is_some_and(|rest| rest.is_empty() || rest.starts_with(['\\', '/']))
 }
@@ -503,7 +645,7 @@ unsafe fn take(p: Result<PWSTR>) -> Result<String> {
 }
 
 /// 开始菜单里的卸载程序、文档和网页链接不算程序。
-fn is_junk(name: &str, id: &str) -> bool {
+pub fn is_junk(name: &str, id: &str) -> bool {
     let (name, id) = (name.to_lowercase(), id.to_lowercase());
     name.contains("uninstall")
         || name.contains("卸载")
