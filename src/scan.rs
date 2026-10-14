@@ -81,7 +81,8 @@ pub fn run(args: &[String]) {
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\t').collect();
-            matches!(f.get(7), Some(&"c") | Some(&"g")).then(|| (f[2].to_lowercase(), f[7] == "c"))
+            // 旧版本记的 c 不算数：那时还认不出"标成命令行、其实开窗口"的程序
+            matches!(f.get(7), Some(&"t") | Some(&"g")).then(|| (f[2].to_lowercase(), f[7] == "t"))
         })
         .collect();
     let store = config::Store::load();
@@ -166,9 +167,9 @@ pub fn run(args: &[String]) {
                 clean(&e.root),
                 clean(&e.resolved),
                 clean(&e.owner),
-                // c 命令行，g 带窗口；空表示没读过文件头
+                // t 命令行，g 带窗口；空表示没读过文件头
                 if e.console {
-                    "c"
+                    "t"
                 } else if matches!(e.kind, Kind::Dir | Kind::Skip)
                     && (e.target.to_lowercase().ends_with(".exe") || e.resolved.split('|').next().unwrap_or("").ends_with(".exe"))
                 {
@@ -348,8 +349,13 @@ fn walk(
                             let target = path.to_string_lossy().into_owned();
                             let resolved =
                                 if ext == "lnk" { unsafe { link_target(&target) } } else { resolved(&target, "") };
-                            if !is_junk(&stem, resolved.split('|').next().unwrap_or("")) {
-                                let real = resolved.split('|').next().unwrap_or("");
+                            let real = resolved.split('|').next().unwrap_or("");
+                            // 指向文件夹的快捷方式不是程序。程序总有扩展名；没有的是文件夹，包括连不上的网络共享
+                            let bare = !real.rsplit(['\\', '/']).next().unwrap_or("").contains('.');
+                            let folder = ext == "lnk"
+                                && !real.is_empty()
+                                && (bare || fs::metadata(real).is_ok_and(|m| m.is_dir()));
+                            if !folder && !is_junk(&stem, real) {
                                 let cached = || known.get(&target.to_lowercase()).copied();
                                 let console = match ext.as_str() {
                                     "exe" => cached().unwrap_or_else(|| is_console(&path)),
@@ -359,8 +365,9 @@ fn walk(
                                     }
                                     _ => false,
                                 };
+                                let name = if ext == "lnk" { own_name(&stem, real) } else { stem };
                                 mine.push(Entry {
-                                    name: stem,
+                                    name,
                                     target,
                                     workdir: dir.to_string_lossy().into_owned(),
                                     kind: Kind::Dir,
@@ -482,15 +489,98 @@ fn system_root() -> String {
     std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()).to_lowercase()
 }
 
-/// 读 exe 文件头里的子系统：3 是命令行程序，没有自己的窗口。
+/// 快捷方式的名字里反复出现它指向的程序名时，名字是给别的工具堆的关键词
+/// （"工具 - Anki - 记忆卡片 - anki.exe - anki"）：只取程序名那一段，保留原来的大小写。
+/// 程序名先看文件名，再看它所在的两层文件夹（"Fluent Search\FluentSearch.exe"）。
+fn own_name(name: &str, real: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mut parts = real.rsplit(['\\', '/']);
+    let file = parts.next().unwrap_or("");
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    for want in [stem].into_iter().chain(parts.take(2)) {
+        let want: Vec<char> = want.chars().collect();
+        if want.len() < 2 || want.len() > chars.len() {
+            continue;
+        }
+        let hits: Vec<usize> = (0..=chars.len() - want.len())
+            .filter(|&i| chars[i..i + want.len()].iter().zip(&want).all(|(a, b)| a.to_lowercase().eq(b.to_lowercase())))
+            // 必须是完整的一个词："Assistant" 里的 ss 不算
+            .filter(|&i| {
+                let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric());
+                !word(i.checked_sub(1).and_then(|j| chars.get(j))) && !word(chars.get(i + want.len()))
+            })
+            .collect();
+        if hits.len() >= 2 {
+            return chars[hits[0]..hits[0] + want.len()].iter().collect();
+        }
+    }
+    name.to_string()
+}
+
+/// 命令行程序界面里用到时会自己开窗口的库：标成命令行的程序带着它们，其实是有窗口的
+const WINDOW_LIBS: &[&str] = &["sdl2.dll", "sdl3.dll", "qt5gui.dll", "qt6gui.dll", "glfw3.dll"];
+
+/// 读 exe 文件头判断是不是命令行程序（子系统 3），只在终端里用。
+/// 有的程序标成命令行、运行时却开自己的窗口：直接链接图形库的（scrcpy 用 SDL），
+/// 或 PyInstaller 打包、里面带着 Qt、Tk、wx 的。这些算带窗口的。
 fn is_console(path: &Path) -> bool {
-    use std::io::Read;
-    let mut buf = [0u8; 1024];
-    let Ok(n) = fs::File::open(path).and_then(|mut f| f.read(&mut buf)) else { return false };
-    let at = |i: usize, len: usize| buf[..n].get(i..i + len);
-    let Some(pe) = at(0x3C, 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize) else { return false };
-    // PE 签名 4 字节 + COFF 头 20 字节，子系统在可选头的第 68 字节
-    at(pe + 24 + 68, 2).is_some_and(|b| u16::from_le_bytes([b[0], b[1]]) == 3)
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = fs::File::open(path) else { return false };
+    let mut head = vec![0u8; 4096];
+    let Ok(n) = f.read(&mut head) else { return false };
+    head.truncate(n);
+    let u16_at = |b: &[u8], i: usize| b.get(i..i + 2).map(|v| u16::from_le_bytes([v[0], v[1]]) as usize);
+    let u32_at = |b: &[u8], i: usize| b.get(i..i + 4).map(|v| u32::from_le_bytes(v.try_into().unwrap()) as usize);
+    let Some(pe) = u32_at(&head, 0x3C) else { return false };
+    // PE 签名 4 字节 + COFF 头 20 字节，之后是可选头；子系统在可选头的第 68 字节
+    let opt = pe + 24;
+    if u16_at(&head, opt + 68) != Some(3) {
+        return false;
+    }
+    let len = f.metadata().map_or(0, |m| m.len() as usize);
+    let mut read_at = |at: usize, len: usize| -> Vec<u8> {
+        let mut buf = vec![0u8; len];
+        let n = f.seek(SeekFrom::Start(at as u64)).and_then(|_| f.read(&mut buf)).unwrap_or(0);
+        buf.truncate(n);
+        buf
+    };
+    // 导入的动态库：导入表在数据目录的第 2 项
+    let dirs = if u16_at(&head, opt) == Some(0x20b) { opt + 112 } else { opt + 96 };
+    let sections = opt + u16_at(&head, pe + 20).unwrap_or(0);
+    let count = u16_at(&head, pe + 6).unwrap_or(0).min(96);
+    let offset = |rva: usize| {
+        (0..count).find_map(|i| {
+            let s = sections + i * 40;
+            let (size, va, raw) = (u32_at(&head, s + 8)?.max(u32_at(&head, s + 16)?), u32_at(&head, s + 12)?, u32_at(&head, s + 20)?);
+            (va..va + size).contains(&rva).then(|| rva - va + raw)
+        })
+    };
+    if let Some(table) = u32_at(&head, dirs + 8).filter(|&r| r != 0).and_then(offset) {
+        let table = read_at(table, 20 * 128);
+        for d in table.chunks_exact(20) {
+            let Some(name) = u32_at(d, 12).filter(|&r| r != 0) else { break };
+            let Some(at) = offset(name) else { continue };
+            let raw = read_at(at, 32);
+            let lib = String::from_utf8_lossy(raw.split(|&b| b == 0).next().unwrap_or(&[])).to_ascii_lowercase();
+            if WINDOW_LIBS.contains(&lib.as_str()) {
+                return false;
+            }
+        }
+    }
+    // PyInstaller 单文件：文件末尾有一个标记，指向打包内容的目录
+    let tail = read_at(len.saturating_sub(4096), 4096);
+    const MAGIC: &[u8] = b"MEI\x0c\x0b\x0a\x0b\x0e";
+    if let Some(i) = tail.windows(8).rposition(|w| w == MAGIC) {
+        let be = |i: usize| tail.get(i..i + 4).map_or(0, |v| u32::from_be_bytes(v.try_into().unwrap()) as usize);
+        let (pkg, toc, toc_len) = (be(i + 8), be(i + 12), be(i + 16));
+        let start = (len.saturating_sub(4096) + i + 88).saturating_sub(pkg);
+        let names = read_at(start + toc, toc_len.min(8 << 20)).to_ascii_lowercase();
+        let gui = [&b"qt5gui"[..], b"qt6gui", b"_tkinter", b"wxmsw", b"wx\\_core"];
+        if gui.iter().any(|g| names.windows(g.len()).any(|w| w == *g)) {
+            return false;
+        }
+    }
+    true
 }
 
 /// 文件夹名太泛，不能当作程序名来认主程序。
@@ -521,13 +611,15 @@ fn fold(entries: &mut [Entry]) {
     for e in entries.iter().filter(|e| matches!(e.kind, Kind::Start | Kind::Store) && !e.resolved.is_empty()) {
         pinned.entry(real(e)).or_insert_with(|| e.target.clone());
     }
+    // 快捷方式是人有意放的指针，不是程序目录的一部分：不当主程序，也不收在别人后面
+    let lnk = |e: &Entry| e.target.to_lowercase().ends_with(".lnk");
     let trim = |s: &str| s.trim_end_matches(['\\', '/']).to_lowercase();
     let parent = |d: &str| d.rsplit_once(['\\', '/']).map(|(p, _)| p.to_string());
     // 程序目录 -> (主程序的好坏, 它是第几条)
     let mut roots: HashMap<String, ((bool, bool, bool, usize, std::cmp::Reverse<usize>), usize)> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         let stem = plain(&e.name);
-        if e.kind != Kind::Dir || stem.chars().count() < 3 {
+        if e.kind != Kind::Dir || lnk(e) || stem.chars().count() < 3 {
             continue;
         }
         let top = trim(&e.root);
@@ -568,7 +660,7 @@ fn fold(entries: &mut [Entry]) {
             if let Some(start) = pinned.get(&real(e)) {
                 return Some(start.clone());
             }
-            if mains.contains(&i) {
+            if mains.contains(&i) || lnk(e) {
                 return None;
             }
             let top = trim(&e.root);
@@ -697,5 +789,23 @@ fn icon(target: &str, px: i32) -> Option<Vec<u8>> {
             bits.chunks_exact_mut(4).for_each(|p| p[3] = 255);
         }
         Some(bits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_keyword_stuffed_shortcut_takes_the_program_name() {
+        let stuffed = "工具 - Anki - 记忆卡片 - utility - anki.exe - anki - 工具";
+        assert_eq!(own_name(stuffed, r"d:\software\anki\anki.exe"), "Anki");
+        assert_eq!(own_name("Anki 2", r"d:\software\anki\anki.exe"), "Anki 2");
+        assert_eq!(own_name("记忆卡片", r"d:\software\anki\anki.exe"), "记忆卡片");
+        assert_eq!(own_name("AB", r"d:\software\anki\anki.exe"), "AB");
+        let aomei = "工具 - AOMEI Partition Assistant - 分区助手 - utility - aomei partition assistant - ss - 工具";
+        assert_eq!(own_name(aomei, r"d:\tools\aomei partition assistant\ss.exe"), "AOMEI Partition Assistant");
+        let fluent = "软件 - Fluent Search - 快速启动工具。 - utility - fluent search - 工具";
+        assert_eq!(own_name(fluent, r"d:\software\fluent search\fluentsearch.exe"), "Fluent Search");
     }
 }

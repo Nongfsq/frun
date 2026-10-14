@@ -234,7 +234,7 @@ pub fn read_all() -> Vec<Entry> {
                 root: f.next()?.to_string(),
                 resolved: f.next()?.to_string(),
                 owner: f.next().unwrap_or("").to_string(),
-                console: f.next() == Some("c"),
+                console: matches!(f.next(), Some("t") | Some("c")),
             })
         })
         .collect()
