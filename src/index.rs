@@ -105,8 +105,12 @@ impl Group {
     pub fn choose(&mut self, store: &Store) {
         let used = |m: &Entry| store.usage.get(&m.target).copied().unwrap_or(0);
         let cur = self.members.iter().position(|m| store.prefer.contains(&m.target)).unwrap_or_else(|| {
-            // 都没用过时，系统里登记的名字比文件名好认
-            let mut best = self.members.iter().position(|m| m.kind != Kind::Dir).unwrap_or(0);
+            // 都没用过时，系统里登记的名字比文件名好认；
+            // 目录里同一个程序既有本体又有快捷方式时，用本体的名字（快捷方式的名字常是给别的工具堆的关键词）
+            let lnk = |m: &Entry| m.target.to_lowercase().ends_with(".lnk");
+            let mut best = (self.members.iter().position(|m| m.kind != Kind::Dir))
+                .or_else(|| self.members.iter().position(|m| !lnk(m)))
+                .unwrap_or(0);
             for (i, m) in self.members.iter().enumerate() {
                 if used(m) > used(&self.members[best]) {
                     best = i;
@@ -363,6 +367,21 @@ mod tests {
             .into_iter(),
         );
         assert_eq!(groups.iter().map(|g| g.members.len()).collect::<Vec<_>>(), [2, 2, 1]);
+    }
+
+    #[test]
+    fn a_program_and_its_shortcut_show_the_program_name() {
+        let exe = r"d:\tools\inpaint.exe|";
+        let mut groups = group(
+            vec![
+                entry("工具 - Inpaint.exe - utility - inpaint", r"D:\Tools\index\工具 - Inpaint.exe.lnk", Kind::Dir, exe),
+                entry("Inpaint", r"D:\Tools\Inpaint.exe", Kind::Dir, exe),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(groups.len(), 1);
+        groups[0].choose(&Store::default());
+        assert_eq!(groups[0].members[groups[0].cur].name, "Inpaint");
     }
 
     #[test]

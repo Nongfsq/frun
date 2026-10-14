@@ -169,7 +169,9 @@ pub fn run(args: &[String]) {
                 // c 命令行，g 带窗口；空表示没读过文件头
                 if e.console {
                     "c"
-                } else if e.kind != Kind::Start && e.kind != Kind::Store && e.target.to_lowercase().ends_with(".exe") {
+                } else if matches!(e.kind, Kind::Dir | Kind::Skip)
+                    && (e.target.to_lowercase().ends_with(".exe") || e.resolved.split('|').next().unwrap_or("").ends_with(".exe"))
+                {
                     "g"
                 } else {
                     ""
@@ -347,8 +349,16 @@ fn walk(
                             let resolved =
                                 if ext == "lnk" { unsafe { link_target(&target) } } else { resolved(&target, "") };
                             if !is_junk(&stem, resolved.split('|').next().unwrap_or("")) {
-                                let console = ext == "exe"
-                                    && known.get(&target.to_lowercase()).copied().unwrap_or_else(|| is_console(&path));
+                                let real = resolved.split('|').next().unwrap_or("");
+                                let cached = || known.get(&target.to_lowercase()).copied();
+                                let console = match ext.as_str() {
+                                    "exe" => cached().unwrap_or_else(|| is_console(&path)),
+                                    // 指向命令行程序的快捷方式同样不收；指向系统自带程序（cmd、PowerShell）的是有意放的，照收
+                                    "lnk" if real.ends_with(".exe") && !under(real, &system_root()) => {
+                                        cached().unwrap_or_else(|| is_console(Path::new(real)))
+                                    }
+                                    _ => false,
+                                };
                                 mine.push(Entry {
                                     name: stem,
                                     target,
@@ -467,6 +477,11 @@ pub fn under(path: &str, base: &str) -> bool {
     path.strip_prefix(&base).is_some_and(|rest| rest.is_empty() || rest.starts_with(['\\', '/']))
 }
 
+/// Windows 目录，小写。
+fn system_root() -> String {
+    std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()).to_lowercase()
+}
+
 /// 读 exe 文件头里的子系统：3 是命令行程序，没有自己的窗口。
 fn is_console(path: &Path) -> bool {
     use std::io::Read;
@@ -503,7 +518,7 @@ fn fold(entries: &mut [Entry]) {
     let real = |e: &Entry| e.resolved.split('|').next().unwrap_or("").to_string();
     // 开始菜单已经指向的文件 -> 那一项的启动目标
     let mut pinned: HashMap<String, String> = HashMap::new();
-    for e in entries.iter().filter(|e| e.kind != Kind::Dir && !e.resolved.is_empty()) {
+    for e in entries.iter().filter(|e| matches!(e.kind, Kind::Start | Kind::Store) && !e.resolved.is_empty()) {
         pinned.entry(real(e)).or_insert_with(|| e.target.clone());
     }
     let trim = |s: &str| s.trim_end_matches(['\\', '/']).to_lowercase();

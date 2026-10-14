@@ -96,6 +96,9 @@ fn explain(path: &str, cfg: &config::Config, store: &Store, all: &[Entry]) -> St
     let path = path.trim().trim_matches('"');
     if let Some(e) = all.iter().find(|e| e.target.eq_ignore_ascii_case(path)) {
         return match e.kind {
+            Kind::Skip if e.console && e.target.to_lowercase().ends_with(".lnk") => {
+                "not indexed: the shortcut points to a console program (no window of its own)".into()
+            }
             Kind::Skip if e.console => "not indexed: it is a console program (no window of its own)".into(),
             Kind::Skip => format!("not indexed: a script inside a program folder (main program: {})", e.owner),
             _ if store.is_hidden(&e.target) => "indexed, but hidden by the user (Settings > Folders > Hidden)".into(),
