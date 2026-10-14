@@ -60,6 +60,32 @@ pub fn run(args: &[String]) {
     let count = |k: Kind| all.iter().filter(|e| e.kind == k).count();
     let _ = writeln!(out, "\n== system\nstart menu: {}, store apps: {}", count(Kind::Start), count(Kind::Store));
 
+    // 和 Windows 自己的记录对照：登记过的主程序应该各占一行（或并进开始菜单里的那一项）。
+    // 这个比例换哪台电脑都能算，是"认主程序"准不准的直接量度
+    let by_target: HashMap<String, &Entry> = all.iter().map(|e| (e.target.to_lowercase(), e)).collect();
+    let mut declared: Vec<String> = scan::declared().into_keys().collect();
+    declared.sort();
+    let (mut total, mut wrong) = (0, Vec::new());
+    for exe in &declared {
+        let Some(e) = by_target.get(exe).filter(|e| matches!(e.kind, Kind::Dir | Kind::Skip) && !e.console) else { continue };
+        total += 1;
+        let owner = by_target.get(&e.owner.to_lowercase());
+        if e.kind == Kind::Skip {
+            wrong.push(format!("  {}: skipped as a script inside a program folder", e.target));
+        } else if !e.owner.is_empty() && !owner.is_some_and(|o| matches!(o.kind, Kind::Start | Kind::Store)) {
+            wrong.push(format!("  {}: folded behind {}", e.target, e.owner));
+        }
+    }
+    let _ = writeln!(
+        out,
+        "\n== main programs vs. Windows records\ninstalled programs inside searched folders: {total}, shown as their own program: {} ({}%)",
+        total - wrong.len(),
+        if total == 0 { 100 } else { (total - wrong.len()) * 100 / total }
+    );
+    for line in &wrong {
+        let _ = writeln!(out, "{line}");
+    }
+
     // 认出的程序目录：主程序后面收了多少个
     let mut mains: HashMap<&str, usize> = HashMap::new();
     for e in all.iter().filter(|e| e.kind == Kind::Dir && !e.owner.is_empty()) {

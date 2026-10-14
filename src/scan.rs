@@ -136,23 +136,7 @@ pub fn run(args: &[String]) {
             write_barren(now, &signature, &barren_of(&seen_dirs));
         }
     }
-    let mut seen = HashSet::new();
-    entries.retain(|e| seen.insert(e.target.to_lowercase()));
-    // 上次没收的这次重新判断：它所在的程序目录可能变了。
-    // 命令行程序只在终端里用，没有人会从启动器里打开：一律不收，也不参与认主程序
-    for e in entries.iter_mut().filter(|e| matches!(e.kind, Kind::Dir | Kind::Skip)) {
-        e.kind = if e.console { Kind::Skip } else { Kind::Dir };
-    }
-    // 目录里的排前面并按路径排序，结果与扫描的先后无关
-    entries.sort_by_cached_key(|e| (e.kind != Kind::Dir, if e.kind == Kind::Dir { e.target.to_lowercase() } else { String::new() }));
-    fold(&mut entries);
-    // 程序目录里收在主程序后面的脚本是程序自带的辅助文件：也不收。自己放的零散脚本照常收
-    for e in entries.iter_mut() {
-        let script = SCRIPTS.iter().any(|x| e.target.to_lowercase().ends_with(x));
-        if e.kind == Kind::Dir && !e.owner.is_empty() && script {
-            e.kind = Kind::Skip;
-        }
-    }
+    settle(&mut entries, &declared());
 
     let clean = |s: &str| s.replace(['\t', '\r', '\n'], " ");
     let text: String = entries
@@ -211,6 +195,132 @@ pub fn run(args: &[String]) {
 
 /// `frun --icons <hwnd> <图标像素> <目标>...`：只取这几个图标。
 /// 面板要显示的行还没有图标时用它，不必等整轮扫描。
+/// 扫到的条目定下去留和归属：哪些不收，哪些是主程序，哪些收在主程序后面。
+/// `declared` 是 Windows 记下的主程序（见 [`declared`]）。
+fn settle(entries: &mut Vec<Entry>, declared: &HashMap<String, String>) {
+    let mut seen = HashSet::new();
+    entries.retain(|e| seen.insert(e.target.to_lowercase()));
+    // 上次没收的这次重新判断：它所在的程序目录可能变了。
+    // 命令行程序只在终端里用，没有人会从启动器里打开：一律不收，也不参与认主程序
+    for e in entries.iter_mut().filter(|e| matches!(e.kind, Kind::Dir | Kind::Skip)) {
+        e.kind = if e.console { Kind::Skip } else { Kind::Dir };
+    }
+    // 目录里的排前面并按路径排序，结果与扫描的先后无关
+    entries.sort_by_cached_key(|e| (e.kind != Kind::Dir, if e.kind == Kind::Dir { e.target.to_lowercase() } else { String::new() }));
+    fold(entries, declared);
+    // 程序目录里收在主程序后面的脚本是程序自带的辅助文件：也不收。自己放的零散脚本照常收
+    for e in entries.iter_mut() {
+        let script = SCRIPTS.iter().any(|x| e.target.to_lowercase().ends_with(x));
+        if e.kind == Kind::Dir && !e.owner.is_empty() && script {
+            e.kind = Kind::Skip;
+        }
+    }
+}
+
+/// Windows 记下的各程序的主程序：exe 路径 -> 它的安装目录，都是小写。
+/// 来自"应用和功能"的卸载信息（图标指向的 exe 和安装位置）和 App Paths。
+/// 这份记录不看文件夹怎么起名，换哪台电脑都一样准，所以认主程序时排在按名字猜的前面。
+pub fn declared() -> HashMap<String, String> {
+    use windows::Win32::System::Registry::*;
+    const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+    const APP_PATHS: &str = r"Software\Microsoft\Windows\CurrentVersion\App Paths";
+    let sources = [
+        (HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, UNINSTALL),
+        (HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, UNINSTALL),
+        (HKEY_CURRENT_USER, REG_SAM_FLAGS(0), UNINSTALL),
+        (HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, APP_PATHS),
+        (HKEY_CURRENT_USER, REG_SAM_FLAGS(0), APP_PATHS),
+    ];
+    // 去掉引号和图标序号（"C:\a\b.exe",0）
+    let clean = |s: String| {
+        let s = s.trim().trim_matches('"');
+        let s = match s.rsplit_once(',') {
+            Some((path, n)) if n.trim().parse::<i32>().is_ok() => path,
+            _ => s,
+        };
+        s.trim().trim_matches('"').trim_end_matches('\\').to_lowercase()
+    };
+    let mut out = HashMap::new();
+    // App Paths 登记的是"能直接按名字运行的 exe"：有的程序把自带的几十个工具全登记了（Calibre 连内部进程都在里面），
+    // 所以只有一个程序只登记了自己这一个时，才当它是主程序
+    let mut paths: HashMap<String, Vec<String>> = HashMap::new();
+    for (hive, view, path) in sources {
+        unsafe {
+            let mut key = HKEY::default();
+            if RegOpenKeyExW(hive, &HSTRING::from(path), None, KEY_READ | view, &mut key).is_err() {
+                continue;
+            }
+            for i in 0.. {
+                let mut name = [0u16; 260];
+                let mut len = name.len() as u32;
+                if RegEnumKeyExW(key, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None).is_err() {
+                    break;
+                }
+                let text = |value: &str| {
+                    let mut buf = [0u16; 1024];
+                    let mut size = (buf.len() * 2) as u32;
+                    let value = HSTRING::from(value);
+                    let ok = RegGetValueW(
+                        key,
+                        PCWSTR(name.as_ptr()),
+                        if value.is_empty() { PCWSTR::null() } else { PCWSTR(value.as_ptr()) },
+                        RRF_RT_REG_SZ,
+                        None,
+                        Some(buf.as_mut_ptr() as _),
+                        Some(&mut size),
+                    );
+                    if ok.is_err() { String::new() } else { clean(String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)])) }
+                };
+                let (exe, home) =
+                    if path == UNINSTALL { (text("DisplayIcon"), text("InstallLocation")) } else { (text(""), text("Path")) };
+                let stem = exe.rsplit(['\\', '/']).next().unwrap_or("");
+                // 卸载信息的图标有时指向卸载程序或安装程序本身
+                let tool = ["unins", "uninst", "setup", "install", "update"].iter().any(|t| stem.contains(t));
+                if !exe.ends_with(".exe") || tool {
+                    continue;
+                }
+                let parent = exe.rsplit_once('\\').map_or(String::new(), |(p, _)| p.to_string());
+                // 安装位置要真的包住这个 exe，而且不是整个盘、离它不超过三层；否则就用 exe 所在的文件夹
+                let near = |h: &str| h.len() > 3 && under(&exe, h) && exe[h.len()..].matches('\\').count() <= 3;
+                let home = if near(&home) { home } else { parent };
+                if path == UNINSTALL {
+                    out.insert(exe, home);
+                } else {
+                    paths.entry(home).or_default().push(exe);
+                }
+            }
+            let _ = RegCloseKey(key);
+        }
+    }
+    let taken: HashSet<String> = out.values().cloned().collect();
+    for (home, exes) in paths {
+        if let [exe] = exes.as_slice()
+            && !taken.contains(&home)
+        {
+            out.entry(exe.clone()).or_insert(home);
+        }
+    }
+    tidy(out)
+}
+
+/// 安装位置有时写的是上一层的总目录（"D:\Software"）：名字太泛，或者底下装着别的登记程序，
+/// 就不是这一个程序的目录，只认 exe 所在的文件夹。
+fn tidy(mut out: HashMap<String, String>) -> HashMap<String, String> {
+    let mut parents: HashMap<String, HashSet<String>> = HashMap::new();
+    for (exe, home) in &out {
+        let parent = exe.rsplit_once('\\').map_or("", |(p, _)| p);
+        parents.entry(home.clone()).or_default().insert(parent.to_string());
+    }
+    for (exe, home) in out.iter_mut() {
+        let folder = home.rsplit('\\').next().unwrap_or("");
+        let shared = parents.get(home.as_str()).is_some_and(|p| p.len() > 1);
+        if GENERIC.contains(&folder) || shared {
+            *home = exe.rsplit_once('\\').map_or(String::new(), |(p, _)| p.to_string());
+        }
+    }
+    out
+}
+
 pub fn run_icons(args: &[String]) {
     let hwnd = args.first().and_then(|a| a.parse::<isize>().ok()).unwrap_or(0);
     let px = args.get(1).and_then(|a| a.parse::<u32>().ok()).unwrap_or(32).clamp(16, 256);
@@ -604,8 +714,9 @@ fn plain(name: &str) -> String {
 ///
 /// 主程序是名字和所在文件夹（或上两级）对得上的那个；有好几个时，
 /// 开始菜单已经指向的优先，其次是完全同名的、带窗口的、离得近的、名字短的。
+/// Windows 记下的主程序（`declared`）不用对名字：它的安装目录就是程序目录，它就是主程序。
 /// 认不出主程序的目录（一堆互不相干的工具）保持原样。
-fn fold(entries: &mut [Entry]) {
+fn fold(entries: &mut [Entry], declared: &HashMap<String, String>) {
     let real = |e: &Entry| e.resolved.split('|').next().unwrap_or("").to_string();
     // 开始菜单已经指向的文件 -> 那一项的启动目标
     let mut pinned: HashMap<String, String> = HashMap::new();
@@ -617,7 +728,25 @@ fn fold(entries: &mut [Entry]) {
     let trim = |s: &str| s.trim_end_matches(['\\', '/']).to_lowercase();
     let parent = |d: &str| d.rsplit_once(['\\', '/']).map(|(p, _)| p.to_string());
     // 程序目录 -> (主程序的好坏, 它是第几条)
-    let mut roots: HashMap<String, ((bool, bool, bool, usize, std::cmp::Reverse<usize>), usize)> = HashMap::new();
+    type Rank = (bool, bool, bool, bool, usize, std::cmp::Reverse<usize>);
+    let mut roots: HashMap<String, (Rank, usize)> = HashMap::new();
+    let mut claim = |dir: String, rank: Rank, i: usize| {
+        let best = roots.entry(dir).or_insert((rank, i));
+        if rank > best.0 {
+            *best = (rank, i);
+        }
+    };
+    for (i, e) in entries.iter().enumerate() {
+        if e.kind != Kind::Dir || lnk(e) {
+            continue;
+        }
+        if let Some(home) = declared.get(&e.target.to_lowercase()) {
+            // 安装目录超出了这个搜索目录时，只认 exe 所在的文件夹
+            let dir = if under(home, &e.root) && trim(home).len() > trim(&e.root).len() { trim(home) } else { trim(&e.workdir) };
+            let rank = (pinned.contains_key(&real(e)), true, true, !e.console, 3, std::cmp::Reverse(e.name.len()));
+            claim(dir, rank, i);
+        }
+    }
     for (i, e) in entries.iter().enumerate() {
         let stem = plain(&e.name);
         if e.kind != Kind::Dir || lnk(e) || stem.chars().count() < 3 {
@@ -635,11 +764,9 @@ fn fold(entries: &mut [Entry]) {
             let exact = name == stem;
             let close = name.chars().count() >= 3 && (stem.starts_with(&name) || name.starts_with(&stem));
             if !GENERIC.contains(&folder) && (exact || close) {
-                let rank = (pinned.contains_key(&real(e)), exact, !e.console, 3 - level, std::cmp::Reverse(e.name.len()));
-                let best = roots.entry(dir.clone()).or_insert((rank, i));
-                if rank > best.0 {
-                    *best = (rank, i);
-                }
+                let mine = declared.contains_key(&e.target.to_lowercase());
+                let rank = (pinned.contains_key(&real(e)), mine, exact, !e.console, 3 - level, std::cmp::Reverse(e.name.len()));
+                claim(dir.clone(), rank, i);
                 break;
             }
             match parent(&dir) {
@@ -796,6 +923,163 @@ fn icon(target: &str, px: i32) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一个只有文件头的假 exe：子系统 2 是窗口程序，3 是命令行程序。扫描只看文件头。
+    fn exe(path: &Path, console: bool) {
+        let mut b = vec![0u8; 0x200];
+        b[..2].copy_from_slice(b"MZ");
+        b[0x3C] = 0x80;
+        b[0x80..0x84].copy_from_slice(b"PE\0\0");
+        b[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        b[0x94..0x96].copy_from_slice(&240u16.to_le_bytes());
+        b[0x98..0x9A].copy_from_slice(&0x20bu16.to_le_bytes());
+        b[0x98 + 68] = if console { 3 } else { 2 };
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b).unwrap();
+    }
+
+    /// 在临时目录里摆出一种常见的目录结构，扫一遍，看哪些程序各占一行。
+    struct Layout {
+        root: PathBuf,
+    }
+
+    impl Layout {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("frun-layout-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            Layout { root }
+        }
+        fn gui(&self, rel: &str) -> &Self {
+            exe(&self.root.join(rel), false);
+            self
+        }
+        fn cli(&self, rel: &str) -> &Self {
+            exe(&self.root.join(rel), true);
+            self
+        }
+        fn file(&self, rel: &str) -> &Self {
+            let p = self.root.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "@echo off").unwrap();
+            self
+        }
+        fn path(&self, rel: &str) -> String {
+            self.root.join(rel).to_string_lossy().to_lowercase()
+        }
+        /// 各占一行的程序（排好序），以及每个主程序后面收了几个。`declared` 是 Windows 的记录：(exe, 安装目录)
+        fn scan(&self, declared: &[(&str, &str)]) -> (Vec<String>, BTreeMap<String, usize>) {
+            let root = self.root.to_string_lossy().into_owned();
+            let exts: Vec<String> = ["exe", "lnk", "bat", "cmd"].map(String::from).to_vec();
+            let (mut out, mut found) = (Vec::new(), BTreeMap::new());
+            walk(&self.root, &root, &exts, &HashMap::new(), &HashSet::new(), None, &mut out, &mut found);
+            settle(&mut out, &tidy(declared.iter().map(|(e, h)| (self.path(e), self.path(h))).collect()));
+            let shown = out.iter().filter(|e| e.kind == Kind::Dir);
+            let mut rows: Vec<String> = shown.clone().filter(|e| e.owner.is_empty()).map(|e| e.name.clone()).collect();
+            rows.sort();
+            let mut behind = BTreeMap::new();
+            for e in shown.filter(|e| !e.owner.is_empty()) {
+                let main = out.iter().find(|m| m.target == e.owner).map_or(e.owner.clone(), |m| m.name.clone());
+                *behind.entry(main).or_default() += 1;
+            }
+            (rows, behind)
+        }
+    }
+
+    impl Drop for Layout {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn rows(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn an_installed_program_takes_one_row() {
+        let l = Layout::new("installed");
+        l.gui(r"Oracle\VirtualBox\VirtualBox.exe")
+            .gui(r"Oracle\VirtualBox\VirtualBoxVM.exe")
+            .gui(r"Oracle\VirtualBox\VBoxSDS.exe")
+            .cli(r"Oracle\VirtualBox\VBoxManage.exe")
+            .gui(r"Oracle\VirtualBox\uninstall.exe");
+        let (shown, behind) = l.scan(&[]);
+        assert_eq!(shown, rows(&["VirtualBox"]));
+        assert_eq!(behind["VirtualBox"], 2);
+    }
+
+    #[test]
+    fn windows_records_name_the_main_program_when_names_do_not() {
+        let l = Layout::new("declared");
+        l.gui(r"Rockstar\Launcher.exe").gui(r"Rockstar\RockstarService.exe");
+        // 只按名字猜：和文件夹同名的是一个后台服务
+        assert_eq!(l.scan(&[]).0, rows(&["RockstarService"]));
+        // Windows 记下的主程序是 Launcher
+        let (shown, behind) = l.scan(&[(r"Rockstar\Launcher.exe", "Rockstar")]);
+        assert_eq!(shown, rows(&["Launcher"]));
+        assert_eq!(behind["Launcher"], 1);
+    }
+
+    #[test]
+    fn a_broad_install_location_does_not_swallow_its_neighbours() {
+        let l = Layout::new("broad");
+        l.gui(r"Software\Alpha\Alpha.exe").gui(r"Software\Beta\Beta.exe").gui(r"Shared\Gamma\Gamma.exe").gui(r"Shared\Delta\Delta.exe");
+        let records = [
+            (r"Software\Alpha\Alpha.exe", "Software"),
+            (r"Shared\Gamma\Gamma.exe", "Shared"),
+            (r"Shared\Delta\Delta.exe", "Shared"),
+        ];
+        assert_eq!(l.scan(&records).0, rows(&["Alpha", "Beta", "Delta", "Gamma"]));
+    }
+
+    #[test]
+    fn loose_tools_each_take_a_row_and_console_tools_none() {
+        let l = Layout::new("tools");
+        l.gui(r"Tools\ImgView.exe").gui(r"Tools\KeyTest.exe").cli(r"Tools\payload-dumper.exe");
+        assert_eq!(l.scan(&[]).0, rows(&["ImgView", "KeyTest"]));
+    }
+
+    #[test]
+    fn a_self_updating_app_shows_the_app_not_its_updater() {
+        let l = Layout::new("squirrel");
+        l.gui(r"Discord\app-1.0.9\Discord.exe").gui(r"Discord\Update.exe");
+        let (shown, behind) = l.scan(&[]);
+        assert_eq!(shown, rows(&["Discord"]));
+        assert_eq!(behind["Discord"], 1);
+    }
+
+    #[test]
+    fn a_version_folder_sits_between_the_program_and_its_name() {
+        let l = Layout::new("versioned");
+        l.gui(r"livehime\8.9.0.11148\livehime.exe").gui(r"livehime\8.9.0.11148\CrashReport.exe");
+        assert_eq!(l.scan(&[]).0, rows(&["livehime"]));
+    }
+
+    #[test]
+    fn a_game_shows_the_game_not_its_crash_handler() {
+        let l = Layout::new("game");
+        l.gui(r"SteamLibrary\steamapps\common\Hollow Knight\hollow_knight.exe")
+            .gui(r"SteamLibrary\steamapps\common\Hollow Knight\UnityCrashHandler64.exe")
+            .gui(r"SteamLibrary\steamapps\common\Celeste\Celeste.exe");
+        assert_eq!(l.scan(&[]).0, rows(&["Celeste", "hollow_knight"]));
+    }
+
+    #[test]
+    fn scripts_inside_a_program_fold_away_but_loose_scripts_stay() {
+        let l = Layout::new("scripts");
+        l.gui(r"Foo\Foo.exe").file(r"Foo\start.bat").file(r"Scripts\backup.bat");
+        assert_eq!(l.scan(&[]).0, rows(&["Foo", "backup"]));
+    }
+
+    #[test]
+    fn dependency_folders_are_never_searched() {
+        let l = Layout::new("deps");
+        l.gui(r"Obsidian\Obsidian.exe").gui(r"Obsidian\resources\node_modules\x\bin\helper.exe").gui(r"Obsidian\.cache\y.exe");
+        let (shown, behind) = l.scan(&[]);
+        assert_eq!(shown, rows(&["Obsidian"]));
+        assert!(behind.is_empty());
+    }
 
     #[test]
     fn a_keyword_stuffed_shortcut_takes_the_program_name() {
