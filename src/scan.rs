@@ -81,8 +81,8 @@ pub fn run(args: &[String]) {
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\t').collect();
-            // 旧版本记的 c 不算数：那时还认不出"标成命令行、其实开窗口"的程序
-            matches!(f.get(7), Some(&"t") | Some(&"g")).then(|| (f[2].to_lowercase(), f[7] == "t"))
+            // 旧版本记的 c、g 不算数：认"标成命令行、其实开窗口"的规则变过
+            matches!(f.get(7), Some(&"t") | Some(&"w")).then(|| (f[2].to_lowercase(), f[7] == "t"))
         })
         .collect();
     let store = config::Store::load();
@@ -167,13 +167,13 @@ pub fn run(args: &[String]) {
                 clean(&e.root),
                 clean(&e.resolved),
                 clean(&e.owner),
-                // t 命令行，g 带窗口；空表示没读过文件头
+                // t 命令行，w 带窗口；空表示没读过文件头
                 if e.console {
                     "t"
                 } else if matches!(e.kind, Kind::Dir | Kind::Skip)
                     && (e.target.to_lowercase().ends_with(".exe") || e.resolved.split('|').next().unwrap_or("").ends_with(".exe"))
                 {
-                    "g"
+                    "w"
                 } else {
                     ""
                 }
@@ -517,11 +517,12 @@ fn own_name(name: &str, real: &str) -> String {
     name.to_string()
 }
 
-/// 命令行程序界面里用到时会自己开窗口的库：标成命令行的程序带着它们，其实是有窗口的
-const WINDOW_LIBS: &[&str] = &["sdl2.dll", "sdl3.dll", "qt5gui.dll", "qt6gui.dll", "glfw3.dll"];
+/// 只用来开窗口画画面的库：标成命令行的程序链接了它们，其实是有窗口的。
+/// Qt 不算：标成命令行又链接 Qt 的多是程序自带的小工具（qtdiag、格式转换器），正式的 Qt 窗口程序都标成窗口程序
+const WINDOW_LIBS: &[&str] = &["sdl2.dll", "sdl3.dll", "glfw3.dll"];
 
 /// 读 exe 文件头判断是不是命令行程序（子系统 3），只在终端里用。
-/// 有的程序标成命令行、运行时却开自己的窗口：直接链接图形库的（scrcpy 用 SDL），
+/// 有的程序标成命令行、运行时却开自己的窗口：直接链接 SDL、GLFW 的（scrcpy），
 /// 或 PyInstaller 打包、里面带着 Qt、Tk、wx 的。这些算带窗口的。
 fn is_console(path: &Path) -> bool {
     use std::io::{Read, Seek, SeekFrom};

@@ -209,8 +209,13 @@ impl App {
                 None if entry.kind == Kind::Dir || group.members.len() > 1 => source_label(&self.s, entry),
                 None => "",
             };
-            // 目录里扫出来的文件带上后缀，淡一档紧跟在名称后面
-            let ext = if entry.kind == Kind::Dir { entry.target.rsplit_once('.').map_or("", |(_, e)| e) } else { "" };
+            // 目录里扫出来的文件带上后缀，淡一档紧跟在名称后面。
+            // 显示名不是文件名时（取回了程序名的快捷方式）不带，否则拼出一个不存在的文件名
+            let file = entry.target.rsplit(['\\', '/']).next().unwrap_or("");
+            let ext = match file.rsplit_once('.') {
+                Some((stem, ext)) if entry.kind == Kind::Dir && stem.eq_ignore_ascii_case(&entry.name) => ext,
+                _ => "",
+            };
             let ext = if ext.is_empty() { String::new() } else { format!(".{}", ext.to_lowercase()) };
             let ext_w = if ext.is_empty() { 0.0 } else { g.measure(&ext, 15.0) + 1.0 };
             let name_w = g.measure(&entry.name, 15.0).min(right - 60.0 - ext_w) + 1.0;
