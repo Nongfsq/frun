@@ -14,11 +14,15 @@ Desktop.ini
 !.env.example
 *.log
 
-# 演示动画的中间产物：由 design/tools 下的脚本重新生成
-design/tools/showreel-preview.html
+# 只留在本机、从不上传：设计稿与宣传片源文件、内部文档、给 AI 的工作规则
+/design/
+/docs/*
+!/docs/media/
+/AGENTS.md
+/CLAUDE.md
 
 # 渲染出的成片、逐帧截图和无损音频：体积大，随时能用脚本重新生成，放哪儿都不提交。
-# 小的展示素材（README 的 GIF、截图、配乐 mp3）照常提交。
+# 小的展示素材（README 的 GIF 和截图）照常提交。
 *.mp4
 *.mov
 *.mkv
