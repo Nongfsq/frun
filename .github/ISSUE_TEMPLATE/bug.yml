@@ -1,0 +1,48 @@
+name: Something is wrong
+description: A program is missing or should not be there, or frun misbehaves. English or 中文.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read [CONTRIBUTING.md](https://github.com/Nongfsq/frun/blob/main/CONTRIBUTING.md) first.
+        An issue without the output of `frun --doctor` is closed without a reply.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: frun version
+      description: The first line of the doctor report, or Settings → General next to Automatic updates. Update to the latest version before reporting.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: From Settings → System → About, for example "Windows 11 24H2, build 26100".
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of frun --doctor
+      description: |
+        Run `frun --doctor` and paste the whole report it opens. For a missing program, run `frun --doctor "C:\path\to\program.exe"` instead; the first section says why it was left out.
+        The report lists folder and program paths from your computer. Read it and remove anything you do not want to share.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the open and closed issues and this is not a duplicate.
+          required: true
+        - label: This is about frun itself, not an advertisement, an invitation, or a request to list frun somewhere.
+          required: true

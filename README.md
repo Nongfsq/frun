@@ -113,7 +113,7 @@ Put `target/release/frun.exe` anywhere you like and run it. Turn on *Launch at s
 
 Settings and usage counts live in `%APPDATA%\frun`; the index and icon cache live in `%LOCALAPPDATA%\frun` and can be deleted at any time. frun sends nothing anywhere. Its only network request is a check of this repository's Releases page, at most once a day, for a newer version. You can turn that off in Settings.
 
-If frun misses a program or shows one it shouldn't, run `frun --doctor`. It writes a report to `%LOCALAPPDATA%\frun\doctor.txt` and opens it. The report lists folder and program paths from your computer, so read it before you attach it to an issue.
+If frun misses a program or shows one it shouldn't, run `frun --doctor`. It writes a report to `%LOCALAPPDATA%\frun\doctor.txt` and opens it. The report lists folder and program paths from your computer, so read it before you attach it to an issue. How issues are handled, and why pull requests from outside are not accepted, is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

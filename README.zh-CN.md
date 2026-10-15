@@ -113,7 +113,7 @@ cargo build --release
 
 设置和使用次数存在 `%APPDATA%\frun`；索引和图标缓存存在 `%LOCALAPPDATA%\frun`，随时可以删。frun 不往外发送任何东西。它唯一的联网，是每天最多一次去本仓库的 Releases 页面看有没有新版本，可以在设置里关掉。
 
-如果 frun 漏了某个程序，或者显示了不该显示的，运行 `frun --doctor`。它会把报告写到 `%LOCALAPPDATA%\frun\doctor.txt` 并打开。报告里有你电脑上的文件夹和程序路径，附到 issue 之前请先看一遍。
+如果 frun 漏了某个程序，或者显示了不该显示的，运行 `frun --doctor`。它会把报告写到 `%LOCALAPPDATA%\frun\doctor.txt` 并打开。报告里有你电脑上的文件夹和程序路径，附到 issue 之前请先看一遍。issue 怎么处理、为什么不接受外部的 pull request，见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。
 
 ## 许可
 
