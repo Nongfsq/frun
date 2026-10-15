@@ -2,7 +2,7 @@
 name = "frun"
 version = "0.1.0"
 edition = "2024"
-description = "极简 Windows 程序启动器"
+description = "A tiny program launcher for Windows"
 license = "MIT"
 repository = "https://github.com/Nongfsq/frun"
 

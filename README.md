@@ -1,37 +1,37 @@
 # frun
 
-[English](README.en.md)
+[中文](README.zh-CN.md)
 
-Windows 上的程序启动器。按 Alt + Space，打几个字母，回车，程序就开了。
+A program launcher for Windows. Press Alt + Space, type a few letters, hit Enter, and the program opens.
 
-它只找程序，不找文件。装在哪里的程序都能找到：开始菜单里的，Microsoft Store 的，还有你放在 D:\Tools 这种文件夹里、从没进过开始菜单的小工具。
+It looks for programs, never files. It finds them wherever they live: the Start menu, the Microsoft Store, and the little tools you keep in folders like D:\Tools that never made it into the Start menu.
 
-## 用法
+## Using it
 
-- **Alt + Space** 呼出，再按一次或 Esc 收起。
-- 直接打名字，或者拼音首字母：`wx` 就是微信。
-- **回车**打开；**Alt + 数字**打开第几行。
-- 一个程序只占一行。想看它目录里的其他 exe，按 **→**。
-- 输入 `d:\` 这样的路径，**Tab** 补全，回车直接打开文件夹。
-- 右键或快捷键：以管理员身份打开（Ctrl + Shift + 回车）、打开所在文件夹（Ctrl + 回车）、不再显示（Ctrl + Del，Ctrl + Z 撤销）。
-- **Ctrl + ,** 打开设置。
+- **Alt + Space** to show it; press again or Esc to hide.
+- Type a name, or the first letters of its pinyin: `wx` finds 微信 (WeChat).
+- **Enter** opens; **Alt + a number** opens that row.
+- One program, one row. Press **→** to see the other exes in its folder.
+- Type a path like `d:\`, **Tab** to complete, Enter to open the folder.
+- Right-click or shortcuts: open as administrator (Ctrl + Shift + Enter), open the containing folder (Ctrl + Enter), hide it (Ctrl + Del, Ctrl + Z to undo).
+- **Ctrl + ,** opens settings.
 
-第一次运行不用设置。frun 会从系统的安装记录里找出你的程序装在哪些文件夹，自己加进来，之后有新程序也会自己更新。
+There is nothing to set up on first run. frun reads the install records Windows keeps, works out which folders hold your programs, and adds them. New programs show up on their own.
 
-## 轻
+## Light
 
-一个 2 MB 左右的 exe，不带运行库，不用网页渲染。在作者的电脑上：每次按键检索约 0.25 毫秒；收起 3 秒后占用的物理内存约 0.4 MB。
+One exe of about 2 MB, no runtime, no web view. On the author's machine, a search takes about 0.25 ms per keystroke, and three seconds after it hides it holds about 0.4 MB of physical memory.
 
-## 从源码构建
+## Building
 
-需要 Windows 10 或 11，和 Rust（2024 edition）。
+Windows 10 or 11 and Rust (2024 edition).
 
 ```
 cargo build --release
 ```
 
-生成的程序在 `target/release/frun.exe`。
+The program ends up at `target/release/frun.exe`.
 
-## 许可
+## License
 
-MIT，见 [LICENSE](LICENSE)。界面字体是更纱黑体的子集，使用 SIL Open Font License 1.1，见 [assets/FONT-NOTICE.md](assets/FONT-NOTICE.md)。
+MIT, see [LICENSE](LICENSE). The interface font is a subset of Sarasa Gothic under the SIL Open Font License 1.1, see [assets/FONT-NOTICE.md](assets/FONT-NOTICE.md).
