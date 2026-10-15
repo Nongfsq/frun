@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/demo.gif" width="92%" alt="打 wx，回车，微信就开了">
+  <img src="docs/media/demo.zh-CN.gif" width="92%" alt="打 wx，回车，微信就开了">
 </p>
 
 frun 只找程序，别的都不管。装在哪里的程序都能找到：开始菜单里的，Microsoft Store 的，还有你放在 `D:\Tools` 这种文件夹里、从没进过开始菜单的小工具。你的文档不会混进来。
@@ -36,7 +36,7 @@ frun 只找程序，别的都不管。装在哪里的程序都能找到：开始
 一个程序目录里常常有十几个 exe：主程序、更新器、崩溃上报、各种辅助工具。frun 只把程序列一次，其余的收在它后面，按 → 才展开。
 
 <p align="center">
-  <img src="docs/media/one-row.jpg" width="80%" alt="VirtualBox 只出一行，按 → 列出同目录的其他程序">
+  <img src="docs/media/one-row.zh-CN.jpg" width="80%" alt="VirtualBox 只出一行，按 → 列出同目录的其他程序">
 </p>
 
 ### 路径也能直接去
@@ -52,7 +52,7 @@ frun 只找程序，别的都不管。装在哪里的程序都能找到：开始
 以管理员身份打开、打开所在文件夹、不再显示某个程序（Ctrl + Z 撤销）、不再查某个文件夹。
 
 <p align="center">
-  <img src="docs/media/menu.jpg" width="80%" alt="右键菜单">
+  <img src="docs/media/menu.zh-CN.jpg" width="80%" alt="右键菜单">
 </p>
 
 ### 深色和浅色
@@ -60,7 +60,7 @@ frun 只找程序，别的都不管。装在哪里的程序都能找到：开始
 跟着 Windows 走，也可以自己选。有多块屏幕时，它出现在鼠标所在的那一块。
 
 <p align="center">
-  <img src="docs/media/light.jpg" width="80%" alt="浅色主题下的设置">
+  <img src="docs/media/light.zh-CN.jpg" width="80%" alt="浅色主题下的设置">
 </p>
 
 ### 想要的话，一律以管理员身份打开
@@ -68,8 +68,8 @@ frun 只找程序，别的都不管。装在哪里的程序都能找到：开始
 在 设置 → 通用 里打开"以管理员身份打开"，之后从 frun 启动的程序都以管理员运行。Windows 照样每次弹窗确认，这是应该的。frun 自己从不要管理员权限。Microsoft Store 的应用不受影响，因为 Windows 不允许它们这样提权运行。
 
 <p align="center">
-  <img src="docs/media/admin-switch.jpg" width="49%" alt="以管理员身份打开的开关">
-  <img src="docs/media/admin-run.jpg" width="49%" alt="从 frun 打开的 Windows PowerShell，以管理员身份运行">
+  <img src="docs/media/admin-switch.zh-CN.jpg" width="49%" alt="以管理员身份打开的开关">
+  <img src="docs/media/admin-run.zh-CN.jpg" width="49%" alt="从 frun 打开的 Windows PowerShell，以管理员身份运行">
 </p>
 
 ### 不用设置

@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/demo.gif" width="92%" alt="Type wx, press Enter, and WeChat opens">
+  <img src="docs/media/demo.en.gif" width="92%" alt="Type we, press Enter, and WeChat opens">
 </p>
 
 frun looks for programs and nothing else. It finds them wherever they live: the Start menu, the Microsoft Store, and the small tools you keep in folders like `D:\Tools` that never made it into the Start menu. Your documents stay out of the way.
@@ -36,7 +36,7 @@ frun looks for programs and nothing else. It finds them wherever they live: the 
 A program folder often holds a dozen exes: the app, its updater, crash reporters, helpers. frun lists the program once and keeps the rest behind it. Press → to see them.
 
 <p align="center">
-  <img src="docs/media/one-row.jpg" width="80%" alt="VirtualBox shows as one row; the arrow key lists the other exes in its folder">
+  <img src="docs/media/one-row.en.jpg" width="80%" alt="VirtualBox shows as one row; the arrow key lists the other exes in its folder">
 </p>
 
 ### Paths work too
@@ -52,7 +52,7 @@ Type `d:\so`, press Tab to complete, keep typing, press Enter, and the folder op
 Open as administrator, open the containing folder, hide a program you never want to see again (Ctrl + Z brings it back), or stop searching a folder.
 
 <p align="center">
-  <img src="docs/media/menu.jpg" width="80%" alt="The right-click menu">
+  <img src="docs/media/menu.en.jpg" width="80%" alt="The right-click menu">
 </p>
 
 ### Light and dark
@@ -60,7 +60,7 @@ Open as administrator, open the containing folder, hide a program you never want
 It follows the Windows theme, or you can pick one. With more than one screen, it opens on the screen your mouse is on.
 
 <p align="center">
-  <img src="docs/media/light.jpg" width="80%" alt="Settings in the light theme">
+  <img src="docs/media/light.en.jpg" width="80%" alt="Settings in the light theme">
 </p>
 
 ### Open everything as administrator, if you want
@@ -68,8 +68,8 @@ It follows the Windows theme, or you can pick one. With more than one screen, it
 Turn on *Open as administrator* in Settings → General, and every program you start from frun runs elevated. Windows still asks each time, as it should. frun itself never asks for administrator rights. Microsoft Store apps are left alone, because Windows does not let them run elevated this way.
 
 <p align="center">
-  <img src="docs/media/admin-switch.jpg" width="49%" alt="The Open as administrator switch">
-  <img src="docs/media/admin-run.jpg" width="49%" alt="Windows PowerShell opened from frun, running as administrator">
+  <img src="docs/media/admin-switch.en.jpg" width="49%" alt="The Open as administrator switch">
+  <img src="docs/media/admin-run.en.jpg" width="49%" alt="Windows PowerShell opened from frun, running as administrator">
 </p>
 
 ### Nothing to set up
