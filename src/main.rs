@@ -11,6 +11,8 @@ mod paths;
 mod platform;
 mod scan;
 mod search;
+#[cfg(test)]
+mod testdir;
 mod textfield;
 mod update;
 mod view;

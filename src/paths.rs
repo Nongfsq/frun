@@ -120,8 +120,7 @@ mod tests {
 
     #[test]
     fn lists_matching_folders_first_then_programs() {
-        let root = std::env::temp_dir().join(format!("frun-paths-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = crate::testdir::TestDir::new("paths");
         for d in ["Software", "Sources", "Other"] {
             fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -143,6 +142,5 @@ mod tests {
         assert_eq!(items[0].path, base);
         assert_eq!(items[0].ghost(&format!("{base}\\")), None);
         assert_eq!(items.len(), 1 + 3 + 2);
-        let _ = fs::remove_dir_all(&root);
     }
 }

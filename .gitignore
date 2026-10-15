@@ -1,4 +1,6 @@
 /target
+# 脚本的临时目录和无头浏览器的配置（tools/headless_edge.py），不放 C: 盘的 %TEMP%
+/.cache/
 
 # OS and editor noise
 Thumbs.db

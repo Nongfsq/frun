@@ -1047,15 +1047,12 @@ mod tests {
 
     /// 在临时目录里摆出一种常见的目录结构，扫一遍，看哪些程序各占一行。
     struct Layout {
-        root: PathBuf,
+        root: crate::testdir::TestDir,
     }
 
     impl Layout {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("frun-layout-{name}-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&root);
-            fs::create_dir_all(&root).unwrap();
-            Layout { root }
+            Layout { root: crate::testdir::TestDir::new(&format!("layout-{name}")) }
         }
         fn gui(&self, rel: &str) -> &Self {
             exe(&self.root.join(rel), false);
@@ -1095,12 +1092,6 @@ mod tests {
                 *behind.entry(main).or_default() += 1;
             }
             (rows, behind)
-        }
-    }
-
-    impl Drop for Layout {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
         }
     }
 
