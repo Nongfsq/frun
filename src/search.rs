@@ -259,3 +259,31 @@ mod tests {
         assert_eq!(names(&ix, &store, "vbox"), ["VBoxSDS", "VBoxManage"]);
     }
 }
+
+#[cfg(test)]
+mod speed {
+    /// 用本机真实的索引测每次按键的检索耗时：cargo test --release search_speed -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn search_speed() {
+        let store = crate::config::Store::load();
+        let index = crate::index::load(&store);
+        let entries: usize = index.groups.iter().map(|g| g.members.len()).sum();
+        println!("groups {} entries {}", index.groups.len(), entries);
+        let mut worst = 0.0f64;
+        let mut total = 0.0f64;
+        let queries = ["w", "wx", "v", "vb", "vbox", "c", "co", "cod", "code", "b", "bl", "ble", "blender", "z", "zd", "终", "jsb", "obs", "steam", "ps"];
+        for q in queries {
+            let n = 200;
+            let began = std::time::Instant::now();
+            for _ in 0..n {
+                std::hint::black_box(super::run(&index, &store, q, 8));
+            }
+            let ms = began.elapsed().as_secs_f64() * 1000.0 / n as f64;
+            worst = worst.max(ms);
+            total += ms;
+            println!("{q:>8}  {ms:.3} ms");
+        }
+        println!("average {:.3} ms, worst {:.3} ms", total / queries.len() as f64, worst);
+    }
+}
