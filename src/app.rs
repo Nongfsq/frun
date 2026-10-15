@@ -37,6 +37,8 @@ const TIMER_TRIM: usize = 4;
 const TIMER_REST: usize = 5;
 /// 每小时看一眼是否该检查更新（每天一次）
 const TIMER_UPDATE: usize = 6;
+/// 收起时的淡出
+const TIMER_CLOSE: usize = 7;
 /// 收起多久之后把绘图资源整个放掉（毫秒）。再呼出时重建，多花几十毫秒
 const REST_AFTER: u32 = 60_000;
 
@@ -49,6 +51,8 @@ pub const PAD: f32 = 6.0;
 /// 按住修饰键多久后才显示数字，避免每次用 Alt+Space 呼出都闪一下。
 const DIGITS_DELAY: Duration = Duration::from_millis(220);
 const PRESS: Duration = Duration::from_millis(110);
+/// 收起淡出的时长（动效规范 M1：呼出 120 ms，收起更快）
+const CLOSE: Duration = Duration::from_millis(80);
 const FLASH: Duration = Duration::from_millis(1800);
 /// 呼出时如果距上次扫描超过这么久，后台核对一次（商店应用的安装没有文件通知）。
 const REVALIDATE: Duration = Duration::from_secs(30);
@@ -296,6 +300,8 @@ pub struct App {
     pub hover: Act,
 
     visible: bool,
+    /// 正在淡出收起：窗口还在屏幕上，但已经不接收输入
+    closing: Option<Instant>,
     pub work: RECT,
     pub dpi: f32,
 
@@ -436,6 +442,7 @@ pub fn run(updated: Option<String>) -> Result<()> {
             hots: Vec::new(),
             hover: Act::None,
             visible: false,
+            closing: None,
             work: RECT::default(),
             dpi: 1.0,
             mode: Mode::Search,
@@ -571,6 +578,7 @@ impl App {
 
     pub fn show(&mut self) {
         let began = Instant::now();
+        self.end_fade();
         (self.work, self.dpi) = monitor(self.cfg.screen == "primary");
         self.refresh_theme();
         self.mode = Mode::Search;
@@ -636,9 +644,55 @@ impl App {
             let _ = ReleaseCapture();
             let _ = KillTimer(Some(self.hwnd), TIMER_CARET);
             let _ = KillTimer(Some(self.hwnd), TIMER_FRAME);
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
         self.timer_rate = 0;
+        if self.anims.off {
+            self.vanish();
+            return;
+        }
+        // 整个窗口连同亚克力底一起淡出：临时改成分层窗口调透明度，并让点击穿过去
+        unsafe {
+            let ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex | (WS_EX_LAYERED | WS_EX_TRANSPARENT).0 as i32);
+            let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), 255, LWA_ALPHA);
+            SetTimer(Some(self.hwnd), TIMER_CLOSE, 8, None);
+        }
+        self.closing = Some(Instant::now());
+    }
+
+    /// 淡出的一步；走完就真正收起。
+    fn fade_step(&mut self) {
+        let Some(t) = self.closing else { return };
+        let k = t.elapsed().as_secs_f32() / CLOSE.as_secs_f32();
+        if k >= 1.0 {
+            self.vanish();
+            return;
+        }
+        // 和呼出同一条曲线 cubic-bezier(.2, .8, .2, 1) 的近似：先快后慢
+        let a = 1.0 - (1.0 - (1.0 - k).powi(3));
+        unsafe {
+            let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), (a * 255.0).round() as u8, LWA_ALPHA);
+        }
+    }
+
+    /// 停掉淡出，窗口恢复成普通窗口（还在不在屏幕上不管）。
+    fn end_fade(&mut self) {
+        if self.closing.take().is_none() {
+            return;
+        }
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_CLOSE);
+            let ex = GetWindowLongW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex & !(WS_EX_LAYERED | WS_EX_TRANSPARENT).0 as i32);
+        }
+    }
+
+    /// 真正从屏幕上拿掉，放掉用不到的资源。
+    fn vanish(&mut self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+        self.end_fade();
         if let Some(g) = &mut self.gfx {
             g.release();
         }
@@ -1983,6 +2037,7 @@ impl App {
             WM_ERASEBKGND => return Some(LRESULT(1)),
             WM_TIMER => match wp.0 {
                 TIMER_FRAME => self.frame(),
+                TIMER_CLOSE => self.fade_step(),
                 TIMER_CARET => {
                     self.caret_on = !self.caret_on;
                     self.invalidate();
