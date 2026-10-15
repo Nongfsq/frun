@@ -360,16 +360,23 @@ impl App {
                     left = right - sw;
                     self.seg(g, id, left, cy - 17.0, sw, &labels, self.seg_value(row), Some(Some(i)), |j| Act::Seg(row, j));
                 }
-                SRow::Ime | SRow::Autostart | SRow::Admin | SRow::Reduce => {
+                SRow::Ime | SRow::Autostart | SRow::Admin | SRow::Update | SRow::Reduce => {
                     label = match row {
                         SRow::Ime => &self.s.ime,
                         SRow::Autostart => &self.s.autostart,
                         SRow::Admin => &self.s.admin,
+                        SRow::Update => &self.s.auto_update,
                         _ => &self.s.reduce,
                     }
                     .clone();
                     self.switch(g, id, right, cy, self.switch_value(row));
                     left = right - 48.0;
+                    // 自动更新：开关左边淡色写着当前版本
+                    if row == SRow::Update {
+                        let version = env!("CARGO_PKG_VERSION");
+                        let vw = g.measure(version, 12.0);
+                        g.text(version, left - vw - 14.0, y, vw + 1.0, ROW, 12.0, t3, Align::Left);
+                    }
                     self.hot(left, cy - 22.0, 48.0, 44.0, Act::Toggle(row), Some(i));
                 }
                 SRow::Hotkey | SRow::Position => {

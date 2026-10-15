@@ -39,6 +39,8 @@ pub struct Config {
     pub reduce_motion: bool,
     /// 默认以管理员身份打开
     pub admin: bool,
+    /// 每天检查一次新版本，有就在面板收起时换上
+    pub auto_update: bool,
     pub dirs: Vec<String>,
     /// 根据 Windows 的安装记录自动加入的目录，界面上标"自动"
     pub auto_dirs: Vec<String>,
@@ -63,6 +65,7 @@ impl Default for Config {
             screen: "pointer".into(),
             reduce_motion: false,
             admin: false,
+            auto_update: true,
             dirs: Vec::new(),
             auto_dirs: Vec::new(),
             declined: Vec::new(),

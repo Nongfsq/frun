@@ -12,6 +12,7 @@ mod platform;
 mod scan;
 mod search;
 mod textfield;
+mod update;
 mod view;
 
 fn main() {
@@ -22,10 +23,13 @@ fn main() {
         scan::run_icons(&args[1..]);
     } else if args.first().is_some_and(|a| a == "--doctor") {
         doctor::run(&args[1..]);
+    } else if args.first().is_some_and(|a| a == "--update") {
+        update::run(&args[1..]);
     } else if args.first().is_some_and(|a| a == "--pick") {
         pick(args.get(1).and_then(|a| a.parse::<isize>().ok()).unwrap_or(0));
     } else {
-        let _ = app::run();
+        let updated = (args.first().is_some_and(|a| a == "--updated")).then(|| args.get(1).cloned()).flatten();
+        let _ = app::run(updated);
     }
 }
 

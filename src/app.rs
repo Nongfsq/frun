@@ -7,6 +7,7 @@ use crate::{
     paths,
     platform::*,
     scan::{self, WM_ICONS, WM_INDEX, WM_PROGRESS},
+    update,
     search,
     textfield::TextField,
 };
@@ -34,6 +35,8 @@ const TIMER_DIRTY: usize = 2;
 const TIMER_CARET: usize = 3;
 const TIMER_TRIM: usize = 4;
 const TIMER_REST: usize = 5;
+/// 每小时看一眼是否该检查更新（每天一次）
+const TIMER_UPDATE: usize = 6;
 /// 收起多久之后把绘图资源整个放掉（毫秒）。再呼出时重建，多花几十毫秒
 const REST_AFTER: u32 = 60_000;
 
@@ -188,6 +191,7 @@ pub enum SRow {
     Ime,
     Autostart,
     Admin,
+    Update,
     Theme,
     Corners,
     Size,
@@ -346,6 +350,10 @@ pub struct App {
 
     drag: Option<Drag>,
     watchers: Watchers,
+    /// 已经下载好的新版本：(版本号, 文件)，面板收起时换上
+    update_ready: Option<(String, std::path::PathBuf)>,
+    /// 刚换上的新版本号：下次呼出时提示一次
+    just_updated: Option<String>,
     tray_icon: HICON,
     taskbar_created: u32,
     timer_rate: u32,
@@ -355,9 +363,19 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
-pub fn run() -> Result<()> {
+/// `updated`：刚换上新版本、由旧版本拉起来的，带着新版本号。
+pub fn run(updated: Option<String>) -> Result<()> {
     unsafe {
-        let _mutex = CreateMutexW(None, true, w!("frun.single"))?;
+        let mut _mutex = CreateMutexW(None, true, w!("frun.single"))?;
+        // 刚换上新版本：旧版本正在退出，等它让出来
+        for _ in 0..50 {
+            if updated.is_none() || GetLastError() != ERROR_ALREADY_EXISTS {
+                break;
+            }
+            let _ = CloseHandle(_mutex);
+            std::thread::sleep(Duration::from_millis(100));
+            _mutex = CreateMutexW(None, true, w!("frun.single"))?;
+        }
         if GetLastError() == ERROR_ALREADY_EXISTS {
             // 已经在运行：让它显示出来
             if let Ok(other) = FindWindowW(w!("frun"), None) {
@@ -460,6 +478,8 @@ pub fn run() -> Result<()> {
             pulse: Instant::now(),
             drag: None,
             watchers: Watchers::default(),
+            update_ready: None,
+            just_updated: None,
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             timer_rate: 0,
             cfg,
@@ -472,6 +492,13 @@ pub fn run() -> Result<()> {
         register_drop(hwnd);
         (app.work, app.dpi) = monitor(true);
         app.scan(Scan::Silent, false);
+        if updated.is_some() {
+            update::clean();
+        }
+        app.just_updated = updated;
+        app.update_ready = update::ready();
+        app.check_update();
+        SetTimer(Some(hwnd), TIMER_UPDATE, 3600 * 1000, None);
         APP.with(|a| *a.borrow_mut() = Some(app));
 
         let mut msg = MSG::default();
@@ -555,6 +582,10 @@ impl App {
         self.recording = false;
         self.caret_on = true;
         self.hover = Act::None;
+        if let Some(version) = self.just_updated.take() {
+            self.flash = self.s.updated_to.replace("{v}", version.trim_start_matches('v'));
+            self.flash_until = Some(Instant::now() + FLASH * 2);
+        }
         self.mod_since = (key_down(VK_MENU.0 as u32) || key_down(VK_CONTROL.0 as u32)).then(Instant::now);
         self.requery();
         self.anims.off = self.cfg.reduce_motion || system_reduced_motion();
@@ -616,6 +647,50 @@ impl App {
             SetTimer(Some(self.hwnd), TIMER_TRIM, 3000, None);
             SetTimer(Some(self.hwnd), TIMER_REST, REST_AFTER, None);
         }
+        // 新版本在面板收起时换上，不打断正在用的人
+        if self.update_ready.is_some() {
+            self.apply_update();
+        }
+    }
+
+    /// 距上次检查过了一天：让子进程去问有没有新版本。
+    fn check_update(&mut self) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        if !self.cfg.auto_update || update::feed().is_none() || now.saturating_sub(update::last_check()) < update::EVERY {
+            return;
+        }
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if let Ok(exe) = std::env::current_exe() {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new(exe)
+                .arg("--update")
+                .arg((self.hwnd.0 as isize).to_string())
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn();
+        }
+    }
+
+    /// 换上下载好的新版本并重启：正在运行的 exe 可以改名，先挪开它，把新的放到原处，拉起新的再退出。
+    /// 哪一步不成就原样放回，下次再试。
+    fn apply_update(&mut self) {
+        let Some((version, file)) = self.update_ready.take() else { return };
+        let Ok(exe) = std::env::current_exe() else { return };
+        let old = exe.with_file_name("frun.old.exe");
+        let _ = std::fs::remove_file(&old);
+        if let Err(e) = std::fs::rename(&exe, &old) {
+            scan::log(&format!("update {version}: cannot move the running exe: {e}"));
+            return;
+        }
+        let placed = std::fs::rename(&file, &exe).is_ok() || std::fs::copy(&file, &exe).is_ok();
+        if !placed || std::process::Command::new(&exe).arg("--updated").arg(&version).spawn().is_err() {
+            let _ = std::fs::remove_file(&exe);
+            let _ = std::fs::rename(&old, &exe);
+            scan::log(&format!("update {version}: cannot start the new version"));
+            return;
+        }
+        scan::log(&format!("update {version}: restarting"));
+        self.tray(NIM_DELETE);
+        unsafe { PostQuitMessage(0) };
     }
 
     /// 绘图资源在长时间收起后会被放掉；要画之前确保它在。
@@ -1097,7 +1172,7 @@ impl App {
 
     pub fn srows(&self) -> Vec<SRow> {
         match self.tab {
-            0 => vec![SRow::Lang, SRow::Hotkey, SRow::Ime, SRow::Autostart, SRow::Admin],
+            0 => vec![SRow::Lang, SRow::Hotkey, SRow::Ime, SRow::Autostart, SRow::Admin, SRow::Update],
             1 => vec![SRow::Theme, SRow::Corners, SRow::Size, SRow::MaxRows, SRow::Position, SRow::Screen, SRow::Reduce],
             _ => {
                 let mut rows: Vec<SRow> =
@@ -1193,6 +1268,7 @@ impl App {
             SRow::Ime => self.cfg.ime_english,
             SRow::Autostart => autostart(),
             SRow::Admin => self.cfg.admin,
+            SRow::Update => self.cfg.auto_update,
             SRow::Reduce => self.cfg.reduce_motion,
             _ => false,
         }
@@ -1203,6 +1279,10 @@ impl App {
             SRow::Ime => self.cfg.ime_english = on,
             SRow::Autostart => set_autostart(on),
             SRow::Admin => self.cfg.admin = on,
+            SRow::Update => {
+                self.cfg.auto_update = on;
+                self.check_update();
+            }
             SRow::Reduce => {
                 self.cfg.reduce_motion = on;
                 self.anims.off = on || system_reduced_motion();
@@ -1483,7 +1563,7 @@ impl App {
                 let v = (self.seg_value(row) as i32 + d).clamp(0, n - 1) as usize;
                 self.set_seg(row, v);
             }
-            SRow::Ime | SRow::Autostart | SRow::Admin | SRow::Reduce => self.set_switch(row, d > 0),
+            SRow::Ime | SRow::Autostart | SRow::Admin | SRow::Update | SRow::Reduce => self.set_switch(row, d > 0),
             SRow::Size => self.set_scale((self.cfg.scale as i32 + d * 5) as u32),
             SRow::Hidden => self.hidden_open = d > 0,
             SRow::MaxRows => self.step_rows(d),
@@ -1495,7 +1575,7 @@ impl App {
     fn activate(&mut self) {
         let Some(row) = self.srow() else { return };
         match row {
-            SRow::Ime | SRow::Autostart | SRow::Admin | SRow::Reduce => self.set_switch(row, !self.switch_value(row)),
+            SRow::Ime | SRow::Autostart | SRow::Admin | SRow::Update | SRow::Reduce => self.set_switch(row, !self.switch_value(row)),
             SRow::Hotkey | SRow::Position => self.press_button(row),
             SRow::Status => self.scan(Scan::Manual, true),
             SRow::Hidden => self.hidden_open = !self.hidden_open,
@@ -1914,6 +1994,7 @@ impl App {
                         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
                     }
                 },
+                TIMER_UPDATE => self.check_update(),
                 TIMER_TRIM => unsafe {
                     let _ = KillTimer(Some(self.hwnd), TIMER_TRIM);
                     if !self.visible {
@@ -2014,6 +2095,12 @@ impl App {
             WM_INDEX => {
                 self.index_ready();
                 self.invalidate();
+            }
+            update::WM_UPDATE => {
+                self.update_ready = update::ready();
+                if !self.visible {
+                    self.apply_update();
+                }
             }
             WM_PROGRESS => {
                 self.progress = wp.0;
