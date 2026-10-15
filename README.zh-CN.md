@@ -14,7 +14,7 @@
   &nbsp;·&nbsp;
   <a href="#按键">按键</a>
   &nbsp;·&nbsp;
-  <a href="#自己构建">自己构建</a>
+  <a href="#下载">下载</a>
   &nbsp;·&nbsp;
   <a href="LICENSE">MIT 许可</a>
 </p>
@@ -99,15 +99,17 @@ frun 只找程序，别的都不管。装在哪里的程序都能找到：开始
   <img src="docs/media/stats.zh-CN.png" width="100%" alt="收起后内存 0.4 MB，每次按键检索 0.25 ms，99.4% 的文件夹直接跳过，整个程序 2 MB">
 </p>
 
-## 自己构建
+## 下载
 
-还没有发布版本。在那之前请自己构建：需要 Windows 10 或 11，和 [Rust](https://rustup.rs)。
+在 [Releases](https://github.com/Nongfsq/frun/releases/latest) 下载 `frun.exe`，放在任意位置运行就行，需要 Windows 10 或 11。想开机就有，在设置里打开"开机自启"。新版本会自己来：frun 在后台下载，用发布时附上的 SHA-256 核对，下次收起时换上。
+
+exe 目前还没有代码签名，第一次运行时 Windows SmartScreen 可能提示"Windows 已保护你的电脑"。点"更多信息"，再点"仍要运行"。
+
+想自己构建，装好 [Rust](https://rustup.rs) 后运行：
 
 ```
 cargo build --release
 ```
-
-把 `target/release/frun.exe` 放在任意位置运行就行。想开机就有，在设置里打开"开机自启"。
 
 ## 你的数据
 

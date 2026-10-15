@@ -14,7 +14,7 @@
   &nbsp;·&nbsp;
   <a href="#keys">Keys</a>
   &nbsp;·&nbsp;
-  <a href="#build-it">Build it</a>
+  <a href="#get-it">Get it</a>
   &nbsp;·&nbsp;
   <a href="LICENSE">MIT License</a>
 </p>
@@ -99,15 +99,17 @@ One exe of about 2 MB, written in Rust. No installer, no runtime, no web view. M
   <img src="docs/media/stats.en.png" width="100%" alt="0.4 MB in memory once hidden, 0.25 ms per keystroke, 99.4% of folders skipped, 2 MB for the whole app">
 </p>
 
-## Build it
+## Get it
 
-There is no release yet. Until there is, build it yourself: you need Windows 10 or 11 and [Rust](https://rustup.rs).
+Download `frun.exe` from [Releases](https://github.com/Nongfsq/frun/releases/latest), put it anywhere you like, and run it. It needs Windows 10 or 11. Turn on *Launch at startup* in Settings if you want it there after a restart. New versions arrive on their own: frun downloads them in the background, checks them against the published SHA-256, and switches over the next time it hides.
+
+The exe is not code-signed yet, so the first time you run it Windows SmartScreen may say it protected your PC. Choose *More info*, then *Run anyway*.
+
+To build it yourself instead, install [Rust](https://rustup.rs) and run:
 
 ```
 cargo build --release
 ```
-
-Put `target/release/frun.exe` anywhere you like and run it. Turn on *Launch at startup* in Settings if you want it there after a restart.
 
 ## Your data
 

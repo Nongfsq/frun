@@ -5,7 +5,11 @@
 - 来源：https://github.com/be5invis/sarasa-gothic
 - 许可：SIL Open Font License 1.1（https://openfontlicense.org）
 - 子集制作：fonttools `pyftsubset`，输出 WOFF2。当前文件由本机安装的 1.0.13 版制作；
-  正式发布前应换成上游最新版重新制作。
+  换新版的安排见下。
 
 发布二进制时，OFL 要求随附上游的版权声明与许可全文。子集过程去掉了字体内部的版权字段，
-所以发布包里必须带上上游仓库的 `LICENSE` 文件——这一步还没做（见 `docs/progress/`）。
+所以上游仓库的 `LICENSE` 原文放在 `assets/FONT-LICENSE.txt`，每个 Release 都把它作为
+`FONT-LICENSE.txt` 和 `frun.exe` 一起发布。
+
+字体本身仍是 1.0.13 版做的子集（上游最新为 1.0.42，2026-10-15 查）；换新版重做子集要核对界面，
+留到之后的版本单独做。
