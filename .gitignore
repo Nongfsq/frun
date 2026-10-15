@@ -13,3 +13,7 @@ Desktop.ini
 .env.*
 !.env.example
 *.log
+
+# 演示动画的中间产物：由 design/tools 下的脚本重新生成
+design/tools/reel-audio.wav
+design/tools/showreel-preview.html
