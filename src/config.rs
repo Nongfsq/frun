@@ -40,6 +40,10 @@ pub struct Config {
     /// 默认以管理员身份打开
     pub admin: bool,
     pub dirs: Vec<String>,
+    /// 根据 Windows 的安装记录自动加入的目录，界面上标"自动"
+    pub auto_dirs: Vec<String>,
+    /// 删掉过的自动目录：不再自动加回来
+    pub declined: Vec<String>,
     pub exts: Vec<String>,
 }
 
@@ -60,6 +64,8 @@ impl Default for Config {
             reduce_motion: false,
             admin: false,
             dirs: Vec::new(),
+            auto_dirs: Vec::new(),
+            declined: Vec::new(),
             exts: ["exe", "lnk", "bat", "cmd"].map(String::from).to_vec(),
         }
     }

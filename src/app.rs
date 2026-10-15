@@ -6,7 +6,7 @@ use crate::{
     index::{self, Index, Kind},
     paths,
     platform::*,
-    scan::{WM_ICONS, WM_INDEX, WM_PROGRESS},
+    scan::{self, WM_ICONS, WM_INDEX, WM_PROGRESS},
     search,
     textfield::TextField,
 };
@@ -467,6 +467,7 @@ pub fn run() -> Result<()> {
         app.refresh_theme();
         app.tray(NIM_ADD);
         app.register_hotkey();
+        app.discover_dirs();
         app.watchers.restart(&app.cfg.dirs, &app.cfg.exts, hwnd);
         register_drop(hwnd);
         (app.work, app.dpi) = monitor(true);
@@ -1062,6 +1063,34 @@ impl App {
         }
         self.expanded = None;
         self.requery();
+        // 程序可能装到了新的地方
+        if self.discover_dirs() {
+            self.dirs_changed();
+        }
+    }
+
+    /// 根据 Windows 的安装记录，把程序集中安装的地方自动加进搜索范围。删掉过的不再加。
+    /// 有新加的返回 true（配置已保存，还没开始扫描）。
+    fn discover_dirs(&mut self) -> bool {
+        let found = scan::discover(&scan::install_locations(), &self.cfg.dirs, &self.cfg.declined, &scan::system_dirs());
+        let mut added = false;
+        for dir in found {
+            // 用磁盘上的真实大小写显示
+            let Ok(real) = std::fs::canonicalize(&dir) else { continue };
+            let real = real.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+            self.cfg.auto_dirs.push(real.clone());
+            self.cfg.dirs.push(real);
+            added = true;
+        }
+        if added {
+            self.changed();
+        }
+        added
+    }
+
+    /// 这个目录是自动加进来的。
+    pub fn is_auto_dir(&self, dir: &str) -> bool {
+        self.cfg.auto_dirs.iter().any(|d| d.eq_ignore_ascii_case(dir))
     }
 
     // ---------- 设置 ----------
@@ -1410,7 +1439,12 @@ impl App {
 
     fn remove_dir(&mut self, i: usize) {
         if i < self.cfg.dirs.len() {
-            self.cfg.dirs.remove(i);
+            let dir = self.cfg.dirs.remove(i);
+            // 删掉的是自动加的：记下来，以后不再加回
+            if self.is_auto_dir(&dir) {
+                self.cfg.auto_dirs.retain(|d| !d.eq_ignore_ascii_case(&dir));
+                self.cfg.declined.push(dir.to_lowercase());
+            }
             self.set_sel = self.set_sel.min(self.srows().len() - 1);
             self.dirs_changed();
         }

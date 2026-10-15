@@ -448,6 +448,12 @@ impl App {
                     let nw = g.measure(&count, 12.0).max(28.0);
                     left -= nw;
                     g.text(&count, left, y, nw + 1.0, ROW, 12.0, t3, Align::Right);
+                    // 自动加进来的目录：数量左边淡色标一下
+                    if self.is_auto_dir(&self.cfg.dirs[n]) {
+                        let aw = g.measure(&self.s.auto_dir, 12.0);
+                        left -= aw + 14.0;
+                        g.text(&self.s.auto_dir, left, y, aw + 1.0, ROW, 12.0, t3, Align::Left);
+                    }
                     let lw = left - 16.0 - label_x;
                     g.text(&label, label_x, y, lw, ROW, 15.0, t1, Align::Left);
                     g.layer(1.0, 0.0, 0.0);

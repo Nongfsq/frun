@@ -345,6 +345,54 @@ pub fn declared() -> HashMap<String, String> {
     tidy(out)
 }
 
+/// 各个已安装程序的安装目录，小写、不带末尾斜杠：卸载信息里的安装位置，没有时用图标指向的 exe 所在的文件夹。
+pub fn install_locations() -> Vec<String> {
+    use reg::*;
+    let mut out = Vec::new();
+    for (hive, view) in [(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY), (HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY), (HKEY_CURRENT_USER, REG_SAM_FLAGS(0))] {
+        each_subkey(hive, view, UNINSTALL, |text| {
+            let home = text("", "InstallLocation").trim().trim_matches('"').trim_end_matches('\\').to_lowercase();
+            let home = if home.len() > 3 {
+                home
+            } else {
+                let exe = exe_of(&text("", "DisplayIcon"));
+                exe.rsplit_once('\\').map_or(String::new(), |(p, _)| p.to_string())
+            };
+            if home.len() > 3 {
+                out.push(home);
+            }
+        });
+    }
+    out
+}
+
+/// 系统自己的程序目录：装在这里的程序开始菜单都有，不用自动加。
+pub fn system_dirs() -> Vec<String> {
+    ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData", "LOCALAPPDATA", "APPDATA"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .map(|d| d.trim_end_matches('\\').to_lowercase())
+        .collect()
+}
+
+/// 程序都装在哪：同一个上层目录里装了两个以上程序，这个上层目录就该在搜索范围里（D:\Software、
+/// X:\SteamLibrary\steamapps\common）。系统目录、整个盘、已经在范围里的、删掉过的都不要；
+/// 一个候选包住另一个时只留外面那个。都是小写。
+pub fn discover(locations: &[String], dirs: &[String], declined: &[String], system: &[String]) -> Vec<String> {
+    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    for home in locations {
+        let Some((parent, _)) = home.trim_end_matches('\\').rsplit_once('\\') else { continue };
+        if parent.len() > 3 && !system.iter().any(|s| under(parent, s)) {
+            *count.entry(parent.to_string()).or_default() += 1;
+        }
+    }
+    let mut out: Vec<String> = count.into_iter().filter(|(_, n)| *n >= 2).map(|(p, _)| p).collect();
+    out.retain(|p| !dirs.iter().chain(declined).any(|d| under(p, d)));
+    let all = out.clone();
+    out.retain(|p| !all.iter().any(|q| q != p && under(p, q)));
+    out
+}
+
 /// Windows 登记为系统服务或后台组件（COM 本地服务器）的 exe，小写。
 /// 它们由系统或程序自己调用，双击什么也看不到，不该出现在结果里。
 pub fn background() -> HashSet<String> {
@@ -1095,6 +1143,31 @@ mod tests {
             (r"Shared\Delta\Delta.exe", "Shared"),
         ];
         assert_eq!(l.scan(&records).0, rows(&["Alpha", "Beta", "Delta", "Gamma"]));
+    }
+
+    #[test]
+    fn program_locations_become_search_folders() {
+        let homes: Vec<String> = [
+            r"d:\software\7-zip",
+            r"d:\software\vlc",
+            r"x:\steamlibrary\steamapps\common\celeste",
+            r"x:\steamlibrary\steamapps\common\hollow knight",
+            r"c:\program files\git",
+            r"c:\program files\vlc",
+            r"e:\virtualbox",
+            r"e:\meta horizon",
+            r"f:\games\a",
+            r"f:\games\b",
+            r"v:\tools\x",
+            r"v:\tools\y",
+        ]
+        .map(String::from)
+        .to_vec();
+        let system = vec![r"c:\program files".to_string()];
+        let dirs = vec![r"v:\".to_string()];
+        let declined = vec![r"f:\games".to_string()];
+        // Program Files 是系统目录；E:\ 下各装一个，是整个盘；V:\ 已经在范围里；F:\Games 删掉过
+        assert_eq!(discover(&homes, &dirs, &declined, &system), [r"d:\software", r"x:\steamlibrary\steamapps\common"]);
     }
 
     #[test]
