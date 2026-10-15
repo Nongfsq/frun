@@ -7,6 +7,7 @@ mod gfx;
 mod i18n;
 mod index;
 mod menu;
+mod paths;
 mod platform;
 mod scan;
 mod search;

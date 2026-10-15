@@ -15,6 +15,7 @@ use std::{
 use windows::{
     Win32::{
         Foundation::*,
+        System::Registry as reg,
         Graphics::Gdi::*,
         System::Com::*,
         UI::{Shell::*, WindowsAndMessaging::PostMessageW},
@@ -136,7 +137,10 @@ pub fn run(args: &[String]) {
             write_barren(now, &signature, &barren_of(&seen_dirs));
         }
     }
-    settle(&mut entries, &declared());
+    let records = std::time::Instant::now();
+    let (declared, background) = (declared(), background());
+    let records = records.elapsed().as_millis();
+    settle(&mut entries, &declared, &background);
 
     let clean = |s: &str| s.replace(['\t', '\r', '\n'], " ");
     let text: String = entries
@@ -174,7 +178,7 @@ pub fn run(args: &[String]) {
     notify(WM_INDEX);
     let count = |k: Kind| entries.iter().filter(|e| e.kind == k).count();
     log(&format!(
-        "scan {} {} ms: folders {} kept {} skipped, start {} store {}{}",
+        "scan {} {} ms (records {records} ms): folders {} kept {} skipped, start {} store {}{}",
         if partial { "partial" } else if deep { "deep" } else { "quick" },
         began.elapsed().as_millis(),
         count(Kind::Dir),
@@ -196,14 +200,26 @@ pub fn run(args: &[String]) {
 /// `frun --icons <hwnd> <图标像素> <目标>...`：只取这几个图标。
 /// 面板要显示的行还没有图标时用它，不必等整轮扫描。
 /// 扫到的条目定下去留和归属：哪些不收，哪些是主程序，哪些收在主程序后面。
-/// `declared` 是 Windows 记下的主程序（见 [`declared`]）。
-fn settle(entries: &mut Vec<Entry>, declared: &HashMap<String, String>) {
+/// `declared` 是 Windows 记下的主程序（见 [`declared`]），`background` 是登记为服务或后台组件的（见 [`background`]）。
+fn settle(entries: &mut Vec<Entry>, declared: &HashMap<String, String>, background: &HashSet<String>) {
     let mut seen = HashSet::new();
     entries.retain(|e| seen.insert(e.target.to_lowercase()));
     // 上次没收的这次重新判断：它所在的程序目录可能变了。
     // 命令行程序只在终端里用，没有人会从启动器里打开：一律不收，也不参与认主程序
     for e in entries.iter_mut().filter(|e| matches!(e.kind, Kind::Dir | Kind::Skip)) {
         e.kind = if e.console { Kind::Skip } else { Kind::Dir };
+    }
+    // 服务和后台组件不收。同时是登记的主程序、或开始菜单指向它的照收：Office 这类正式程序本身也是后台组件
+    let pinned: HashSet<String> = entries
+        .iter()
+        .filter(|e| matches!(e.kind, Kind::Start | Kind::Store))
+        .map(|e| e.resolved.split('|').next().unwrap_or("").to_string())
+        .collect();
+    for e in entries.iter_mut().filter(|e| e.kind == Kind::Dir) {
+        let t = e.target.to_lowercase();
+        if background.contains(&t) && !declared.contains_key(&t) && !pinned.contains(&t) {
+            e.kind = Kind::Skip;
+        }
     }
     // 目录里的排前面并按路径排序，结果与扫描的先后无关
     entries.sort_by_cached_key(|e| (e.kind != Kind::Dir, if e.kind == Kind::Dir { e.target.to_lowercase() } else { String::new() }));
@@ -217,13 +233,71 @@ fn settle(entries: &mut Vec<Entry>, declared: &HashMap<String, String>) {
     }
 }
 
+/// 逐个读注册表里某个键下的子键。回调拿到一个读字符串值的函数：
+/// `text(子路径, 值名)` 读"这个子键\子路径"里的值（子路径和值名为空表示子键本身、默认值），读不到给空串。
+fn each_subkey(hive: reg::HKEY, view: reg::REG_SAM_FLAGS, path: &str, mut each: impl FnMut(&dyn Fn(&str, &str) -> String)) {
+    use reg::*;
+    unsafe {
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(hive, &HSTRING::from(path), None, KEY_READ | view, &mut key).is_err() {
+            return;
+        }
+        for i in 0.. {
+            let mut name = [0u16; 260];
+            let mut len = name.len() as u32;
+            if RegEnumKeyExW(key, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None).is_err() {
+                break;
+            }
+            let name = String::from_utf16_lossy(&name[..len as usize]);
+            let text = |sub: &str, value: &str| {
+                let sub = HSTRING::from(if sub.is_empty() { name.clone() } else { format!("{name}\\{sub}") });
+                let value = HSTRING::from(value);
+                let mut buf = [0u16; 1024];
+                let mut size = (buf.len() * 2) as u32;
+                let ok = RegGetValueW(
+                    key,
+                    &sub,
+                    if value.is_empty() { PCWSTR::null() } else { PCWSTR(value.as_ptr()) },
+                    RRF_RT_REG_SZ,
+                    None,
+                    Some(buf.as_mut_ptr() as _),
+                    Some(&mut size),
+                );
+                if ok.is_err() { String::new() } else { String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)]) }
+            };
+            each(&text);
+        }
+        let _ = RegCloseKey(key);
+    }
+}
+
+/// 注册表里写的程序路径取出 exe 本身，小写：去掉引号、图标序号（"C:\a\b.exe",0）和后面的参数。
+fn exe_of(s: &str) -> String {
+    let s = s.trim();
+    let s = match s.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(""),
+        None => {
+            let lower = s.to_lowercase();
+            lower.find(".exe").map_or(s, |i| &s[..i + 4])
+        }
+    };
+    let s = match s.rsplit_once(',') {
+        Some((path, n)) if n.trim().parse::<i32>().is_ok() => path,
+        _ => s,
+    };
+    // 服务的路径有时写成 \??\C:\... 或 \SystemRoot\...
+    let s = s.trim().trim_start_matches(r"\??\");
+    s.to_lowercase()
+}
+
+const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+const APP_PATHS: &str = r"Software\Microsoft\Windows\CurrentVersion\App Paths";
+
 /// Windows 记下的各程序的主程序：exe 路径 -> 它的安装目录，都是小写。
 /// 来自"应用和功能"的卸载信息（图标指向的 exe 和安装位置）和 App Paths。
 /// 这份记录不看文件夹怎么起名，换哪台电脑都一样准，所以认主程序时排在按名字猜的前面。
 pub fn declared() -> HashMap<String, String> {
-    use windows::Win32::System::Registry::*;
-    const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
-    const APP_PATHS: &str = r"Software\Microsoft\Windows\CurrentVersion\App Paths";
+    use reg::*;
     let sources = [
         (HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, UNINSTALL),
         (HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, UNINSTALL),
@@ -231,66 +305,34 @@ pub fn declared() -> HashMap<String, String> {
         (HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, APP_PATHS),
         (HKEY_CURRENT_USER, REG_SAM_FLAGS(0), APP_PATHS),
     ];
-    // 去掉引号和图标序号（"C:\a\b.exe",0）
-    let clean = |s: String| {
-        let s = s.trim().trim_matches('"');
-        let s = match s.rsplit_once(',') {
-            Some((path, n)) if n.trim().parse::<i32>().is_ok() => path,
-            _ => s,
-        };
-        s.trim().trim_matches('"').trim_end_matches('\\').to_lowercase()
-    };
+    let folder = |s: String| s.trim().trim_matches('"').trim_end_matches('\\').to_lowercase();
     let mut out = HashMap::new();
     // App Paths 登记的是"能直接按名字运行的 exe"：有的程序把自带的几十个工具全登记了（Calibre 连内部进程都在里面），
     // 所以只有一个程序只登记了自己这一个时，才当它是主程序
     let mut paths: HashMap<String, Vec<String>> = HashMap::new();
     for (hive, view, path) in sources {
-        unsafe {
-            let mut key = HKEY::default();
-            if RegOpenKeyExW(hive, &HSTRING::from(path), None, KEY_READ | view, &mut key).is_err() {
-                continue;
+        each_subkey(hive, view, path, |text| {
+            let (exe, home) = if path == UNINSTALL {
+                (exe_of(&text("", "DisplayIcon")), folder(text("", "InstallLocation")))
+            } else {
+                (exe_of(&text("", "")), folder(text("", "Path")))
+            };
+            let stem = exe.rsplit(['\\', '/']).next().unwrap_or("");
+            // 卸载信息的图标有时指向卸载程序或安装程序本身
+            let tool = ["unins", "uninst", "setup", "install", "update"].iter().any(|t| stem.contains(t));
+            if !exe.ends_with(".exe") || tool {
+                return;
             }
-            for i in 0.. {
-                let mut name = [0u16; 260];
-                let mut len = name.len() as u32;
-                if RegEnumKeyExW(key, i, Some(PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None).is_err() {
-                    break;
-                }
-                let text = |value: &str| {
-                    let mut buf = [0u16; 1024];
-                    let mut size = (buf.len() * 2) as u32;
-                    let value = HSTRING::from(value);
-                    let ok = RegGetValueW(
-                        key,
-                        PCWSTR(name.as_ptr()),
-                        if value.is_empty() { PCWSTR::null() } else { PCWSTR(value.as_ptr()) },
-                        RRF_RT_REG_SZ,
-                        None,
-                        Some(buf.as_mut_ptr() as _),
-                        Some(&mut size),
-                    );
-                    if ok.is_err() { String::new() } else { clean(String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)])) }
-                };
-                let (exe, home) =
-                    if path == UNINSTALL { (text("DisplayIcon"), text("InstallLocation")) } else { (text(""), text("Path")) };
-                let stem = exe.rsplit(['\\', '/']).next().unwrap_or("");
-                // 卸载信息的图标有时指向卸载程序或安装程序本身
-                let tool = ["unins", "uninst", "setup", "install", "update"].iter().any(|t| stem.contains(t));
-                if !exe.ends_with(".exe") || tool {
-                    continue;
-                }
-                let parent = exe.rsplit_once('\\').map_or(String::new(), |(p, _)| p.to_string());
-                // 安装位置要真的包住这个 exe，而且不是整个盘、离它不超过三层；否则就用 exe 所在的文件夹
-                let near = |h: &str| h.len() > 3 && under(&exe, h) && exe[h.len()..].matches('\\').count() <= 3;
-                let home = if near(&home) { home } else { parent };
-                if path == UNINSTALL {
-                    out.insert(exe, home);
-                } else {
-                    paths.entry(home).or_default().push(exe);
-                }
+            let parent = exe.rsplit_once('\\').map_or(String::new(), |(p, _)| p.to_string());
+            // 安装位置要真的包住这个 exe，而且不是整个盘、离它不超过三层；否则就用 exe 所在的文件夹
+            let near = |h: &str| h.len() > 3 && under(&exe, h) && exe[h.len()..].matches('\\').count() <= 3;
+            let home = if near(&home) { home } else { parent };
+            if path == UNINSTALL {
+                out.insert(exe, home);
+            } else {
+                paths.entry(home).or_default().push(exe);
             }
-            let _ = RegCloseKey(key);
-        }
+        });
     }
     let taken: HashSet<String> = out.values().cloned().collect();
     for (home, exes) in paths {
@@ -301,6 +343,23 @@ pub fn declared() -> HashMap<String, String> {
         }
     }
     tidy(out)
+}
+
+/// Windows 登记为系统服务或后台组件（COM 本地服务器）的 exe，小写。
+/// 它们由系统或程序自己调用，双击什么也看不到，不该出现在结果里。
+pub fn background() -> HashSet<String> {
+    use reg::*;
+    let mut out = HashSet::new();
+    each_subkey(HKEY_LOCAL_MACHINE, REG_SAM_FLAGS(0), r"System\CurrentControlSet\Services", |text| {
+        out.insert(exe_of(&text("", "ImagePath")));
+    });
+    for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+        each_subkey(HKEY_LOCAL_MACHINE, view, r"Software\Classes\CLSID", |text| {
+            out.insert(exe_of(&text("LocalServer32", "")));
+        });
+    }
+    out.retain(|e| e.ends_with(".exe"));
+    out
 }
 
 /// 安装位置有时写的是上一层的总目录（"D:\Software"）：名字太泛，或者底下装着别的登记程序，
@@ -969,11 +1028,16 @@ mod tests {
         }
         /// 各占一行的程序（排好序），以及每个主程序后面收了几个。`declared` 是 Windows 的记录：(exe, 安装目录)
         fn scan(&self, declared: &[(&str, &str)]) -> (Vec<String>, BTreeMap<String, usize>) {
+            self.scan_with(declared, &[])
+        }
+        /// `background` 是登记为服务或后台组件的 exe
+        fn scan_with(&self, declared: &[(&str, &str)], background: &[&str]) -> (Vec<String>, BTreeMap<String, usize>) {
             let root = self.root.to_string_lossy().into_owned();
             let exts: Vec<String> = ["exe", "lnk", "bat", "cmd"].map(String::from).to_vec();
             let (mut out, mut found) = (Vec::new(), BTreeMap::new());
             walk(&self.root, &root, &exts, &HashMap::new(), &HashSet::new(), None, &mut out, &mut found);
-            settle(&mut out, &tidy(declared.iter().map(|(e, h)| (self.path(e), self.path(h))).collect()));
+            let declared = tidy(declared.iter().map(|(e, h)| (self.path(e), self.path(h))).collect());
+            settle(&mut out, &declared, &background.iter().map(|e| self.path(e)).collect());
             let shown = out.iter().filter(|e| e.kind == Kind::Dir);
             let mut rows: Vec<String> = shown.clone().filter(|e| e.owner.is_empty()).map(|e| e.name.clone()).collect();
             rows.sort();
@@ -1031,6 +1095,18 @@ mod tests {
             (r"Shared\Delta\Delta.exe", "Shared"),
         ];
         assert_eq!(l.scan(&records).0, rows(&["Alpha", "Beta", "Delta", "Gamma"]));
+    }
+
+    #[test]
+    fn services_and_background_components_are_not_programs() {
+        let l = Layout::new("services");
+        l.gui(r"VirtualBox\VirtualBox.exe").gui(r"VirtualBox\VBoxSDS.exe").gui(r"VirtualBox\VBoxSVC.exe").gui(r"VirtualBox\VBoxNetNAT.exe");
+        l.gui(r"Office\WINWORD.exe");
+        let background = [r"VirtualBox\VBoxSDS.exe", r"VirtualBox\VBoxSVC.exe", r"Office\WINWORD.exe"];
+        // Word 也是后台组件，但 Windows 记着它是装好的主程序：照收
+        let (shown, behind) = l.scan_with(&[(r"Office\WINWORD.exe", "Office")], &background);
+        assert_eq!(shown, rows(&["VirtualBox", "WINWORD"]));
+        assert_eq!(behind["VirtualBox"], 1);
     }
 
     #[test]

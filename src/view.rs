@@ -93,6 +93,18 @@ impl App {
         let mut q = std::mem::take(&mut self.query);
         g.field(&mut q, x, 0.0, fw, BAR, 20.0, t1, accent.a(0.35), caret);
         self.query = q;
+        // 路径模式：光标后淡色显示选中项的补全，Tab 接受
+        if live
+            && self.query.at_end()
+            && self.query.selection().is_none()
+            && let Some(rest) = self.path_item().and_then(|p| p.ghost(&self.query.string()))
+        {
+            let kw = g.measure("Tab", 12.0) + 12.0;
+            let gx = self.query.caret_x + 1.0;
+            g.text(&rest, gx, 0.0, (x + fw - kw - 12.0 - gx).max(0.0), BAR, 20.0, t3, Align::Left);
+            g.fill(x + fw - kw, 17.0, kw, 22.0, 5.0, self.theme.kbd);
+            g.text("Tab", x + fw - kw, 17.0, kw, 22.0, 12.0, self.theme.t2, Align::Center);
+        }
 
         if live {
             self.hot(0.0, 0.0, w, BAR, Act::Bar, None);
@@ -151,12 +163,18 @@ impl App {
         let px = self.icon_px();
         for i in 0..self.rows.len() {
             let row = &self.rows[i];
-            let group = &self.index.groups[row.group];
+            let group = if row.path { &self.paths[row.group] } else { &self.index.groups[row.group] };
             let entry = &group.members[row.member];
             let y = BAR + i as f32 * ROW;
             let dim = if row.variant && !row.current { 0.55 } else { 1.0 };
 
-            if !g.icon(entry.icon_key(), px, 20.0, y + 10.0, 28.0, dim) {
+            if row.path && self.path_items.get(row.group).is_some_and(|p| p.dir) {
+                // 路径模式里的文件夹：淡底上画一个文件夹
+                g.fill(20.0, y + 10.0, 28.0, 28.0, 7.0, self.theme.well);
+                let (x0, y0) = (26.0, y + 17.0);
+                let folder = [(x0, y0), (x0 + 5.0, y0), (x0 + 6.6, y0 + 1.6), (x0 + 16.0, y0 + 1.6), (x0 + 16.0, y0 + 14.0), (x0, y0 + 14.0)];
+                g.path(&folder, true, 1.3, t2);
+            } else if !g.icon(entry.icon_key(), px, 20.0, y + 10.0, 28.0, dim) {
                 self.icon_wanted.push(entry.target.clone());
                 let first = entry.name.chars().next().unwrap_or(' ');
                 let tile = if entry.kind == Kind::Dir { TOOL_TILE } else { TILES[first as usize % TILES.len()] };

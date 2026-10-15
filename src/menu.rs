@@ -74,7 +74,8 @@ impl App {
     /// 结果行的菜单：把只有快捷键的操作摆出来。`at` 为空时贴着这一行弹出（键盘触发）。
     pub fn open_row_menu(&mut self, i: usize, at: Option<POINT>) {
         let Some(row) = self.rows.get(i) else { return };
-        let entry = &self.index.groups[row.group].members[row.member];
+        let path = row.path;
+        let entry = if path { &self.paths[row.group].members[0] } else { &self.index.groups[row.group].members[row.member] };
         let mut items = vec![(self.s.menu_open.clone(), "↵", Cmd::Open)];
         if entry.kind != Kind::Store && !self.cfg.admin {
             items.push((self.s.admin.clone(), "Ctrl Shift ↵", Cmd::Admin));
@@ -82,8 +83,11 @@ impl App {
         if location(entry).is_some() {
             items.push((self.s.menu_folder.clone(), "Ctrl ↵", Cmd::Folder));
         }
-        items.push((self.s.menu_hide.clone(), "Ctrl Del", Cmd::Hide));
-        if excludable(entry).is_some() {
+        // 路径模式里列的是磁盘上的东西，不是索引里的程序：没有"不再显示"
+        if !path {
+            items.push((self.s.menu_hide.clone(), "Ctrl Del", Cmd::Hide));
+        }
+        if !path && excludable(entry).is_some() {
             items.push((self.s.menu_exclude.clone(), "", Cmd::Exclude));
         }
         self.sel = i;

@@ -80,9 +80,9 @@ pub fn run(index: &Index, store: &Store, query: &str, max: usize) -> Vec<Hit> {
     let len = |gi: usize| index.groups[gi].entry().name.len();
     hits.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| len(a.1).cmp(&len(b.1))).then_with(|| a.1.cmp(&b.1)));
     hits.truncate(max);
-    hits.into_iter()
-        .map(|(_, group, marks)| Hit { group, marks, extra: index.folded(group, store).count() })
-        .collect()
+    // 行右侧的数量和 → 展开后看到的一致：有输入时只数对得上的
+    let extra = |group: usize| index.folded(group, store).filter(|&h| q.is_empty() || matched(&index.groups[h], &q).is_some()).count();
+    hits.into_iter().map(|(_, group, marks)| Hit { group, marks, extra: extra(group) }).collect()
 }
 
 /// 匹配的档次：前缀 3、词首 2、子串 1、子序列 0。
@@ -243,10 +243,11 @@ mod tests {
         }
         ix.link();
         let mut store = Store::default();
-        // 对上好几个：给出主程序，带着收起的数量
+        // 对上好几个：给出主程序，带着收起的、对得上输入的数量（latex-git-log、mk-git-x 不算）
         let hits = run(&ix, &store, "vbox", 8);
         assert_eq!(hits.len(), 1);
-        assert_eq!((hits[0].group, hits[0].extra), (0, 4));
+        assert_eq!((hits[0].group, hits[0].extra), (0, 2));
+        assert_eq!(run(&ix, &store, "", 8).len(), 0);
         // 对上好几个但都不是以输入开头：给出对得最好的那一个，而不是名字对不上的主程序
         assert_eq!(names(&ix, &store, "git"), ["mk-git-x"]);
         // 只对上一个：直接给出它

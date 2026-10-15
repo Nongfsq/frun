@@ -126,6 +126,7 @@ fn explain(path: &str, cfg: &config::Config, store: &Store, all: &[Entry]) -> St
                 "not indexed: the shortcut points to a console program (no window of its own)".into()
             }
             Kind::Skip if e.console => "not indexed: it is a console program (no window of its own)".into(),
+            Kind::Skip if e.owner.is_empty() => "not indexed: Windows lists it as a service or background component".into(),
             Kind::Skip => format!("not indexed: a script inside a program folder (main program: {})", e.owner),
             _ if store.is_hidden(&e.target) => "indexed, but hidden by the user (Settings > Folders > Hidden)".into(),
             _ if e.owner.is_empty() => "indexed: shown on its own row".into(),

@@ -4,6 +4,7 @@ use crate::{
     gfx::{Color, Gfx},
     i18n::{self, Strings},
     index::{self, Index, Kind},
+    paths,
     platform::*,
     scan::{WM_ICONS, WM_INDEX, WM_PROGRESS},
     search,
@@ -246,6 +247,8 @@ pub struct Row {
     pub current: bool,
     pub stack: usize,
     pub marks: Vec<bool>,
+    /// 路径模式的一项：`group` 指向 `App::paths`，不是程序索引
+    pub path: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -297,6 +300,9 @@ pub struct App {
     pub rows: Vec<Row>,
     pub sel: usize,
     expanded: Option<usize>,
+    /// 路径模式下这一层列出的文件夹和程序；`paths` 是同样内容做成的分组，给结果行用
+    pub path_items: Vec<paths::Item>,
+    pub paths: Vec<index::Group>,
     pub error: Option<(String, String)>,
     pub fresh: HashSet<String>,
     pub menu: crate::menu::Menu,
@@ -419,6 +425,8 @@ pub fn run() -> Result<()> {
             rows: Vec::new(),
             sel: 0,
             expanded: None,
+            path_items: Vec::new(),
+            paths: Vec::new(),
             error: None,
             fresh: HashSet::new(),
             menu: Default::default(),
@@ -761,6 +769,12 @@ impl App {
     fn requery(&mut self) {
         let max = self.cfg.max_rows as usize;
         let q = self.query.string();
+        if paths::is_path(&q) {
+            self.list_path(&q, max);
+            return;
+        }
+        self.path_items.clear();
+        self.paths.clear();
         let mut rows = Vec::new();
         let typed: Vec<char> = q.trim().to_lowercase().chars().collect();
         for hit in search::run(&self.index, &self.store, &q, max) {
@@ -773,22 +787,23 @@ impl App {
                 for i in order {
                     let marks = if i == g.cur { hit.marks.clone() } else { Vec::new() };
                     let current = several && i == g.cur;
-                    rows.push(Row { group: hit.group, member: i, variant: several, current, stack: 0, marks });
+                    rows.push(Row { group: hit.group, member: i, variant: several, current, stack: 0, marks, path: false });
                 }
-                // 然后是同一个程序目录里收在它后面的：对得上输入的在前
+                // 然后是同一个程序目录里收在它后面的。有输入时只列对得上的，没有输入时列全部
                 let mut behind: Vec<(i32, usize, Vec<bool>)> = self
                     .index
                     .folded(hit.group, &self.store)
-                    .map(|h| match search::matched(&self.index.groups[h], &typed) {
-                        Some((score, marks)) => (score, h, marks),
-                        None => (0, h, Vec::new()),
+                    .filter_map(|h| match search::matched(&self.index.groups[h], &typed) {
+                        Some((score, marks)) => Some((score, h, marks)),
+                        None if typed.is_empty() => Some((0, h, Vec::new())),
+                        None => None,
                     })
                     .collect();
                 let name = |h: usize| self.index.groups[h].entry().name.to_lowercase();
                 behind.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| name(a.1).cmp(&name(b.1))));
                 for (_, h, marks) in behind.into_iter().take(max) {
                     let member = self.index.groups[h].cur;
-                    rows.push(Row { group: h, member, variant: true, current: false, stack: 0, marks });
+                    rows.push(Row { group: h, member, variant: true, current: false, stack: 0, marks, path: false });
                 }
             } else {
                 rows.push(Row {
@@ -798,6 +813,7 @@ impl App {
                     current: false,
                     stack: g.members.len() + hit.extra,
                     marks: hit.marks,
+                    path: false,
                 });
             }
         }
@@ -809,6 +825,83 @@ impl App {
             self.auto_rescanned = true;
             self.scan(Scan::Auto, false);
         }
+    }
+
+    /// 路径模式：列出这一层的文件夹和程序。它们不进程序索引，也不记使用次数。
+    fn list_path(&mut self, q: &str, max: usize) {
+        self.path_items = paths::list(q, &self.cfg.exts, max);
+        self.paths = self
+            .path_items
+            .iter()
+            .map(|item| index::Group {
+                members: vec![index::Entry {
+                    name: item.name.clone(),
+                    target: item.path.clone(),
+                    workdir: item.parent.clone(),
+                    kind: Kind::Dir,
+                    root: String::new(),
+                    resolved: String::new(),
+                    owner: String::new(),
+                    console: false,
+                }],
+                cur: 0,
+                keys: Vec::new(),
+                owner: None,
+                helpers: Vec::new(),
+            })
+            .collect();
+        self.rows = (self.path_items.iter().enumerate())
+            .map(|(i, item)| Row {
+                group: i,
+                member: 0,
+                variant: false,
+                current: false,
+                stack: 0,
+                marks: (0..item.name.chars().count()).map(|c| c < item.typed).collect(),
+                path: true,
+            })
+            .collect();
+        self.sel = self.sel.min(self.rows.len().saturating_sub(1));
+    }
+
+    /// 路径模式里选中的那一项。
+    pub fn path_item(&self) -> Option<&paths::Item> {
+        self.rows.get(self.sel).filter(|r| r.path).and_then(|r| self.path_items.get(r.group))
+    }
+
+    /// 接受选中项的补全：文件夹补上反斜杠，接着列下一层。
+    fn accept_path(&mut self) -> bool {
+        let Some(text) = self.path_item().map(|i| i.completed()) else { return false };
+        if text == self.query.string() {
+            return false;
+        }
+        self.query.set(&text);
+        self.typed();
+        true
+    }
+
+    /// 打开路径模式里的一项：文件夹用资源管理器打开，程序直接运行。
+    fn open_path(&mut self, i: usize, admin: bool) {
+        let Some(item) = self.rows.get(i).filter(|r| r.path).and_then(|r| self.path_items.get(r.group)) else { return };
+        let (file, dir) = (HSTRING::from(&item.path), HSTRING::from(&item.parent));
+        let target = item.path.clone();
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_FLAG_NO_UI,
+            lpVerb: if admin && !item.dir { w!("runas") } else { w!("open") },
+            lpFile: PCWSTR(file.as_ptr()),
+            lpDirectory: if item.parent.is_empty() { PCWSTR::null() } else { PCWSTR(dir.as_ptr()) },
+            nShow: SW_SHOWNORMAL.0,
+            ..Default::default()
+        };
+        self.sel = i;
+        if let Err(e) = unsafe { ShellExecuteExW(&mut info) } {
+            if e.code() != ERROR_CANCELLED.to_hresult() {
+                self.error = Some((target, self.s.err_failed.clone()));
+            }
+            return;
+        }
+        self.pressed = Some(Instant::now());
     }
 
     /// 启动失败是因为文件没了：把它移出索引（下次扫描也不会再收录）。
@@ -843,6 +936,10 @@ impl App {
     pub fn launch(&mut self, i: usize, admin: bool) {
         let Some(row) = self.rows.get(i) else { return };
         if self.pressed.is_some() {
+            return;
+        }
+        if row.path {
+            self.open_path(i, admin || self.cfg.admin);
             return;
         }
         let entry = self.index.groups[row.group].members[row.member].clone();
@@ -900,7 +997,8 @@ impl App {
     /// 在资源管理器里打开程序所在的文件夹并选中它。
     pub fn reveal(&mut self, i: usize) {
         let Some(row) = self.rows.get(i) else { return };
-        let Some(path) = location(&self.index.groups[row.group].members[row.member]) else { return };
+        let groups = if row.path { &self.paths } else { &self.index.groups };
+        let Some(path) = location(&groups[row.group].members[row.member]) else { return };
         let args = HSTRING::from(format!("/select,\"{path}\""));
         let mut info = SHELLEXECUTEINFOW {
             cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
@@ -1224,7 +1322,7 @@ impl App {
 
     /// 不再显示选中的程序（它的所有来源）。
     pub fn hide_selected(&mut self) {
-        let Some(row) = self.rows.get(self.sel) else { return };
+        let Some(row) = self.rows.get(self.sel).filter(|r| !r.path) else { return };
         let group = &self.index.groups[row.group];
         let name = group.entry().name.clone();
         let items: Vec<(String, String, String)> = group
@@ -1245,7 +1343,7 @@ impl App {
 
     /// 不再查选中程序所在的文件夹。和"不再显示"记在同一张表里，同样可以撤销和找回。
     pub fn exclude_folder(&mut self, i: usize) {
-        let Some(row) = self.rows.get(i) else { return };
+        let Some(row) = self.rows.get(i).filter(|r| !r.path) else { return };
         let entry = &self.index.groups[row.group].members[row.member];
         let Some(dir) = excludable(entry) else { return };
         let name = dir.to_string();
@@ -1440,6 +1538,8 @@ impl App {
             self.move_sel(1, repeat);
         } else if is(VK_UP) {
             self.move_sel(-1, repeat);
+        } else if (is(VK_TAB) && !shift || is(VK_RIGHT) && self.query.at_end()) && self.accept_path() {
+            // 路径模式：接受选中项的补全
         } else if is(VK_TAB) {
             self.move_sel(if shift { -1 } else { 1 }, repeat);
         } else if is(VK_RIGHT) && self.query.at_end() && stack > 1 {
