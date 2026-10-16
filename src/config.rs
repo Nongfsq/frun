@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 pub const WIDTH_MIN: u32 = 480;
@@ -95,19 +95,23 @@ pub fn cache_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("frun")
 }
 
-fn path() -> PathBuf {
-    data_dir().join("config.toml")
-}
-
 pub fn load() -> Config {
-    let text = fs::read_to_string(path()).unwrap_or_default();
-    toml::from_str::<Config>(&text).unwrap_or_default().sanitize()
+    load_from(&data_dir())
 }
 
 pub fn save(cfg: &Config) {
-    let _ = fs::create_dir_all(data_dir());
+    save_to(&data_dir(), cfg)
+}
+
+fn load_from(dir: &Path) -> Config {
+    let text = fs::read_to_string(dir.join("config.toml")).unwrap_or_default();
+    toml::from_str::<Config>(&text).unwrap_or_default().sanitize()
+}
+
+fn save_to(dir: &Path, cfg: &Config) {
+    let _ = fs::create_dir_all(dir);
     if let Ok(text) = toml::to_string(cfg) {
-        let _ = fs::write(path(), text);
+        let _ = fs::write(dir.join("config.toml"), text);
     }
 }
 
@@ -173,7 +177,11 @@ pub struct Store {
 
 impl Store {
     pub fn load() -> Self {
-        let read = |name: &str| fs::read_to_string(data_dir().join(name)).unwrap_or_default();
+        Self::load_from(&data_dir())
+    }
+
+    fn load_from(dir: &Path) -> Self {
+        let read = |name: &str| fs::read_to_string(dir.join(name)).unwrap_or_default();
         Self {
             usage: read("usage.tsv")
                 .lines()
@@ -210,8 +218,11 @@ impl Store {
     }
 
     pub fn save(&self) {
-        let dir = data_dir();
-        let _ = fs::create_dir_all(&dir);
+        self.save_to(&data_dir())
+    }
+
+    fn save_to(&self, dir: &Path) {
+        let _ = fs::create_dir_all(dir);
         let usage: String = self.usage.iter().map(|(t, n)| format!("{n}\t{t}\n")).collect();
         let picks: String = self.picks.iter().map(|(q, t)| format!("{q}\t{t}\n")).collect();
         let prefer: String = self.prefer.iter().map(|t| format!("{t}\n")).collect();

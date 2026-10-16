@@ -4,6 +4,7 @@
 //! 所以这些工作放在用完即退的子进程里做，主进程只读结果文件。
 use crate::{
     config,
+    files::write_atomic,
     index::{self, Entry, Kind},
 };
 use std::{
@@ -465,14 +466,6 @@ fn icons(targets: &[String], px: u32, force: bool) {
             });
         }
     });
-}
-
-/// 先写临时文件再改名，主进程不会读到写了一半的文件。
-fn write_atomic(path: &Path, bytes: &[u8]) {
-    let tmp = path.with_extension(format!("tmp{:?}", std::thread::current().id()));
-    if fs::write(&tmp, bytes).is_ok() {
-        let _ = fs::rename(&tmp, path);
-    }
 }
 
 /// 不进去找的目录：系统与隐藏目录、依赖与缓存目录。它们里面的可执行文件不是用户要启动的程序。

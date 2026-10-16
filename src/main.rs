@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod doctor;
+mod files;
 mod gfx;
 mod i18n;
 mod index;
