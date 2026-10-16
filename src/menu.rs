@@ -10,7 +10,7 @@ use windows::{
         Foundation::*,
         Graphics::{Dwm::*, Gdi::*},
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Controls::MARGINS, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
+        UI::{Controls::MARGINS, Input::KeyboardAndMouse::*, Shell::NIM_DELETE, WindowsAndMessaging::*},
     },
     core::*,
 };
@@ -216,9 +216,12 @@ impl App {
         match cmd {
             Cmd::Settings => self.show_settings(),
             Cmd::Reindex => self.rebuild_index(),
-            Cmd::Quit => unsafe {
-                let _ = DestroyWindow(self.hwnd);
-            },
+            // 这里正借着应用状态：DestroyWindow 会同步派发 WM_DESTROY，重入时借不到，
+            // 退出就丢了，进程带着单实例锁留下来。所以直接收尾。
+            Cmd::Quit => {
+                self.tray(NIM_DELETE);
+                unsafe { PostQuitMessage(0) };
+            }
             Cmd::Open => self.launch(row, false),
             Cmd::Admin => self.launch(row, true),
             Cmd::Folder => self.reveal(row),

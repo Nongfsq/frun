@@ -1986,7 +1986,7 @@ impl App {
 
     // ---------- 消息 ----------
 
-    fn tray(&self, action: NOTIFY_ICON_MESSAGE) {
+    pub fn tray(&self, action: NOTIFY_ICON_MESSAGE) {
         unsafe {
             let mut data = NOTIFYICONDATAW {
                 cbSize: size_of::<NOTIFYICONDATAW>() as u32,
