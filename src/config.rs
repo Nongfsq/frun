@@ -1,7 +1,9 @@
+use crate::files::{write_atomic, write_durable};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
@@ -104,14 +106,24 @@ pub fn save(cfg: &Config) {
 }
 
 fn load_from(dir: &Path) -> Config {
-    let text = fs::read_to_string(dir.join("config.toml")).unwrap_or_default();
-    toml::from_str::<Config>(&text).unwrap_or_default().sanitize()
+    let path = dir.join("config.toml");
+    let parsed = match fs::read_to_string(&path) {
+        Err(e) if e.kind() == ErrorKind::NotFound => return Config::default(),
+        read => read.ok().and_then(|text| toml::from_str::<Config>(&text).ok()),
+    };
+    parsed
+        .unwrap_or_else(|| {
+            // Moved aside so the next save cannot replace the user's settings with defaults.
+            let _ = fs::rename(&path, dir.join("config.toml.bad"));
+            Config::default()
+        })
+        .sanitize()
 }
 
 fn save_to(dir: &Path, cfg: &Config) {
     let _ = fs::create_dir_all(dir);
     if let Ok(text) = toml::to_string(cfg) {
-        let _ = fs::write(dir.join("config.toml"), text);
+        write_durable(&dir.join("config.toml"), text.as_bytes());
     }
 }
 
@@ -226,11 +238,11 @@ impl Store {
         let usage: String = self.usage.iter().map(|(t, n)| format!("{n}\t{t}\n")).collect();
         let picks: String = self.picks.iter().map(|(q, t)| format!("{q}\t{t}\n")).collect();
         let prefer: String = self.prefer.iter().map(|t| format!("{t}\n")).collect();
-        let _ = fs::write(dir.join("usage.tsv"), usage);
-        let _ = fs::write(dir.join("picks.tsv"), picks);
-        let _ = fs::write(dir.join("prefer.tsv"), prefer);
         let hidden: String = self.hidden.iter().map(|(t, n, s)| format!("{t}\t{n}\t{s}\n")).collect();
-        let _ = fs::write(dir.join("hidden.tsv"), hidden);
+        // Saved on every launch from the UI thread, so these skip the flush that write_durable adds.
+        for (name, text) in [("usage.tsv", usage), ("picks.tsv", picks), ("prefer.tsv", prefer), ("hidden.tsv", hidden)] {
+            write_atomic(&dir.join(name), text.as_bytes());
+        }
     }
 }
 
@@ -254,5 +266,59 @@ mod tests {
         let back: Config = toml::from_str(&text).unwrap();
         assert_eq!(back.hotkey, "Alt+Space");
         assert_eq!(back.exts, ["exe", "lnk", "bat", "cmd"]);
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> =
+            fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_broken_config_is_set_aside_not_overwritten() {
+        let dir = crate::testdir::TestDir::new("config-broken");
+        let broken = "hotkey = \"Ctrl+K\"\ndirs = [\"D:\\\\Tools\"";
+        fs::write(dir.join("config.toml"), broken).unwrap();
+
+        let mut cfg = load_from(&dir);
+        assert_eq!(cfg.hotkey, "Alt+Space");
+        // The first-run save at startup must leave the user's file alone.
+        cfg.language = "en".into();
+        save_to(&dir, &cfg);
+
+        assert_eq!(fs::read_to_string(dir.join("config.toml.bad")).unwrap(), broken);
+        assert_eq!(load_from(&dir).language, "en");
+        assert_eq!(names(&dir), ["config.toml", "config.toml.bad"]);
+    }
+
+    #[test]
+    fn a_missing_config_starts_from_defaults() {
+        let dir = crate::testdir::TestDir::new("config-missing");
+        assert_eq!(load_from(&dir).hotkey, "Alt+Space");
+        assert!(names(&dir).is_empty());
+    }
+
+    #[test]
+    fn settings_and_records_survive_a_save_and_load() {
+        let dir = crate::testdir::TestDir::new("config-saved");
+        let cfg = Config { hotkey: "Ctrl+Alt+K".into(), dirs: vec![r"D:\Tools".into()], ..Config::default() };
+        save_to(&dir, &cfg);
+        let mut store = Store::default();
+        store.usage.insert(r"D:\Tools\a.exe".into(), 3);
+        store.picks.insert("a".into(), r"D:\Tools\a.exe".into());
+        store.prefer.insert(r"D:\Tools\a.exe".into());
+        store.hidden.push((r"D:\Tools\b\".into(), "b".into(), String::new()));
+        store.save_to(&dir);
+
+        let back = load_from(&dir);
+        assert_eq!(back.hotkey, "Ctrl+Alt+K");
+        assert_eq!(back.dirs, [r"D:\Tools"]);
+        let back = Store::load_from(&dir);
+        assert_eq!(back.usage[r"D:\Tools\a.exe"], 3);
+        assert_eq!(back.picks["a"], r"D:\Tools\a.exe");
+        assert!(back.prefer.contains(r"D:\Tools\a.exe"));
+        assert_eq!(back.hidden_dirs(), [r"d:\tools\b"]);
+        assert_eq!(names(&dir), ["config.toml", "hidden.tsv", "picks.tsv", "prefer.tsv", "usage.tsv"]);
     }
 }
