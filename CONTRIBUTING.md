@@ -6,7 +6,11 @@ English or 中文.
 
 ## Issues
 
-Use one of the two forms. Blank issues are turned off.
+Use one of the two forms. Blank issues are turned off. An issue filed another way,
+for example by an assistant through the API, is accepted when it is as complete: the
+frun version, the Windows version, and steps that reproduce the problem. The
+`frun --doctor` report is still needed when a program is missing or should not be
+there.
 
 **Something is wrong.** A program is missing or should not be there, or frun
 misbehaves. The form asks for your frun version, your Windows version, and the full
@@ -32,8 +36,7 @@ An issue is closed without a reply, and may be locked or deleted, when it is:
 
 - an advertisement, an invitation, a request to list or promote frun somewhere, or
   anything else that is not about frun;
-- filed without the form, or with the required fields left empty or filled with
-  placeholders;
+- missing what the form asks for, or filled with placeholders;
 - a duplicate of an open or closed issue;
 - a question that the README answers.
 
