@@ -420,7 +420,7 @@ pub fn tray_icon() -> HICON {
     unsafe {
         let inst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
         let size = GetSystemMetrics(SM_CXSMICON);
-        // 资源编号 1，见 assets/frun.rc
+        // 资源编号 1，见 build.rs
         LoadImageW(Some(inst.into()), PCWSTR(1 as _), IMAGE_ICON, size, size, LR_DEFAULTCOLOR)
             .map(|h| HICON(h.0))
             .unwrap_or_else(|_| LoadIconW(None, IDI_APPLICATION).unwrap_or_default())

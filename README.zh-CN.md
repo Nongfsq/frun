@@ -111,6 +111,8 @@ exe 目前还没有代码签名，第一次运行时 Windows SmartScreen 可能�
 cargo build --release
 ```
 
+不想用了：在设置里关掉"开机自启"，从托盘图标退出，再删掉 `frun.exe` 以及 `%APPDATA%\frun`、`%LOCALAPPDATA%\frun` 两个文件夹。
+
 ## 你的数据
 
 设置和使用次数存在 `%APPDATA%\frun`；索引和图标缓存存在 `%LOCALAPPDATA%\frun`，随时可以删。frun 不往外发送任何东西。它唯一的联网，是每天最多一次去本仓库的 Releases 页面看有没有新版本，可以在设置里关掉。

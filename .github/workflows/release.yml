@@ -1,0 +1,80 @@
+# Builds a release from a pushed tag (v0.3.0 and so on) and leaves it as a draft.
+# The release notes are the tag's message: git tag -a v0.3.0 -F notes.md
+# When SignPath is set up (secret SIGNPATH_API_TOKEN, variable SIGNPATH_ORGANIZATION_ID),
+# frun.exe is signed first; each signing request waits for manual approval in SignPath.
+# Publishing the draft is a separate, manual step: installed copies update from the latest published release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      SIGN: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $v = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "Cargo.toml says $v, the tag is $env:GITHUB_REF_NAME" }
+
+      - run: rustup update stable --no-self-update
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+
+      - uses: actions/upload-artifact@v4
+        id: unsigned
+        with:
+          name: frun-unsigned
+          path: target/release/frun.exe
+          if-no-files-found: error
+
+      - if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: frun
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed
+
+      - name: Assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          $exe = if ($env:SIGN -eq 'true') { 'signed/frun.exe' } else { 'target/release/frun.exe' }
+          Copy-Item $exe dist/frun.exe
+          if ($env:SIGN -eq 'true') {
+            $s = Get-AuthenticodeSignature dist/frun.exe
+            if ($s.Status -ne 'Valid') { throw "signature is $($s.Status)" }
+          }
+          # The format the built-in updater checks: "<sha256>  frun.exe" and a newline
+          $hash = (Get-FileHash dist/frun.exe -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/dist/frun.exe.sha256", "$hash  frun.exe`n")
+          Copy-Item assets/FONT-LICENSE.txt dist/
+          Copy-Item LICENSE dist/LICENSE.txt
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Draft release
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag (Get-ChildItem dist).FullName --clobber
+          } else {
+            gh release create $tag --draft --verify-tag --notes-from-tag --title "frun $($tag.TrimStart('v'))" (Get-ChildItem dist).FullName
+          }

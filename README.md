@@ -111,6 +111,8 @@ To build it yourself instead, install [Rust](https://rustup.rs) and run:
 cargo build --release
 ```
 
+To remove frun, turn off *Launch at startup*, quit it from the tray icon, and delete `frun.exe` along with the `%APPDATA%\frun` and `%LOCALAPPDATA%\frun` folders.
+
 ## Your data
 
 Settings and usage counts live in `%APPDATA%\frun`; the index and icon cache live in `%LOCALAPPDATA%\frun` and can be deleted at any time. frun sends nothing anywhere. Its only network request is a check of this repository's Releases page, at most once a day, for a newer version. You can turn that off in Settings.
