@@ -266,7 +266,7 @@ fn relevant(buf: &[u32], len: usize, exts: &[String], root: &str) -> Option<Stri
         let field = |i: usize| u32::from_le_bytes(head[i..i + 4].try_into().unwrap()) as usize;
         let (next, name_len) = (field(0), field(8));
         let raw = bytes.get(at + 12..at + 12 + name_len)?;
-        let name: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let name: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)).collect();
         let name = String::from_utf16_lossy(&name);
         let ext = name.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_lowercase());
         if exts.contains(&ext) && !skipped(root, &name) {

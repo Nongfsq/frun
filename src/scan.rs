@@ -34,7 +34,7 @@ static NOTIFY: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::
 /// 每找到一批条目报一次数，首次建索引时面板上的数字靠它跳动。
 fn progress(n: usize) {
     let hwnd = NOTIFY.load(std::sync::atomic::Ordering::Relaxed);
-    if hwnd != 0 && n % 16 == 0 {
+    if hwnd != 0 && n.is_multiple_of(16) {
         unsafe {
             let _ = PostMessageW(Some(HWND(hwnd as _)), WM_PROGRESS, WPARAM(n), LPARAM(0));
         }
@@ -486,6 +486,7 @@ pub const CACHE_TAG: &str = "CACHEDIR.TAG";
 
 /// 把一个用户目录完整走一遍，只收指定类型的文件。
 /// 遍历主要在等磁盘，按目录分给多个线程。
+#[expect(clippy::too_many_arguments, reason = "one call site; the inputs and the three outputs are all distinct")]
 fn walk(
     start: &Path,
     root: &str,
@@ -774,7 +775,7 @@ fn is_console(path: &Path) -> bool {
     };
     if let Some(table) = u32_at(&head, dirs + 8).filter(|&r| r != 0).and_then(offset) {
         let table = read_at(table, 20 * 128);
-        for d in table.chunks_exact(20) {
+        for d in table.as_chunks::<20>().0 {
             let Some(name) = u32_at(d, 12).filter(|&r| r != 0) else { break };
             let Some(at) = offset(name) else { continue };
             let raw = read_at(at, 32);
@@ -1019,8 +1020,8 @@ fn icon(target: &str, px: i32) -> Option<Vec<u8>> {
             return None;
         }
         // 没有 alpha 通道的旧图标：整张视为不透明
-        if bits.chunks_exact(4).all(|p| p[3] == 0) {
-            bits.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+        if bits.as_chunks::<4>().0.iter().all(|p| p[3] == 0) {
+            bits.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
         }
         Some(bits)
     }

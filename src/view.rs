@@ -262,7 +262,7 @@ impl App {
         let title = self.s.settings.clone();
         g.text(&title, 54.0, 0.0, tx - 54.0 - 12.0, BAR, 20.0, t1, Align::Left);
         let labels = [self.s.tab_general.clone(), self.s.tab_look.clone(), self.s.tab_dirs.clone()];
-        self.seg(g, ID_TABS, tx, 11.0, tabs_w, &labels, self.tab, live.then_some(None), |i| Act::Tab(i));
+        self.seg(g, ID_TABS, tx, 11.0, tabs_w, &labels, self.tab, live.then_some(None), Act::Tab);
         if live {
             self.hot(0.0, 0.0, tx, BAR, Act::Bar, None);
             self.hot(12.0, 12.0, 32.0, 32.0, Act::Back, None);
@@ -270,7 +270,7 @@ impl App {
     }
 
     /// 分段选择：选中的那一段底下有一块会滑动的凸起。
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "a drawing call takes its box, style and colour; bundling them only moves the list to every call site")]
     fn seg(
         &mut self,
         g: &mut Gfx,
@@ -526,7 +526,7 @@ impl App {
                             None => ghosts.push((ext.clone(), *n)),
                         }
                     }
-                    ghosts.sort_by(|a, b| b.1.cmp(&a.1));
+                    ghosts.sort_by_key(|g| std::cmp::Reverse(g.1));
                     tokens.extend(ghosts.into_iter().take(3).map(|(e, n)| (e, n, false)));
                     let floor = PAD + 14.0 + g.measure(&label, 15.0) + 16.0;
                     for (ext, n, active) in tokens.into_iter().rev() {

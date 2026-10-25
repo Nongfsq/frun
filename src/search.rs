@@ -30,9 +30,11 @@ const STARTERS: [&str; 6] = [
 pub fn run(index: &Index, store: &Store, query: &str, max: usize) -> Vec<Hit> {
     let q: Vec<char> = query.trim().to_lowercase().chars().collect();
     let pick = store.picks.get(&q.iter().collect::<String>());
-    let mut hits: Vec<(i32, usize, Vec<bool>)> = Vec::new();
+    // (rank, group, matched characters)
+    type Scored = (i32, usize, Vec<bool>);
+    let mut hits: Vec<Scored> = Vec::new();
     // 收在主程序后面的：(匹配的档次, 命中)
-    let mut behind: HashMap<usize, Vec<(i32, (i32, usize, Vec<bool>))>> = HashMap::new();
+    let mut behind: HashMap<usize, Vec<(i32, Scored)>> = HashMap::new();
     for (gi, g) in index.groups.iter().enumerate() {
         let used = g.usage(store).min(50) as i32;
         if q.is_empty() {

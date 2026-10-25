@@ -167,8 +167,9 @@ impl Gfx {
                 self.rt = Some(rt);
                 self.size = size;
                 self.icons.clear();
-            } else if size != self.size {
-                let rt = self.rt.as_ref().unwrap();
+            } else if let Some(rt) = &self.rt
+                && size != self.size
+            {
                 rt.Resize(&D2D_SIZE_U { width: size.0, height: size.1 })?;
                 self.size = size;
             }
@@ -256,6 +257,7 @@ impl Gfx {
         }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "a drawing call takes its box, style and colour; bundling them only moves the list to every call site")]
     pub fn outline(&self, x: f32, y: f32, w: f32, h: f32, r: f32, width: f32, c: Color) {
         let (Some(rt), Some(b)) = (&self.rt, self.brush(c)) else { return };
         let rect = D2D_RECT_F { left: x, top: y, right: x + w, bottom: y + h };
@@ -375,12 +377,13 @@ impl Gfx {
     }
 
     /// 在给定的框里画一行文字，垂直居中，放不下时以省略号结尾。
+    #[expect(clippy::too_many_arguments, reason = "a drawing call takes its box, style and colour; bundling them only moves the list to every call site")]
     pub fn text(&mut self, s: &str, x: f32, y: f32, w: f32, h: f32, size: f32, c: Color, align: Align) {
         self.text_marked(s, x, y, w, h, size, c, align, &[], c);
     }
 
     /// 同 `text`，`marks[i]` 为真的字符用 `mark` 色（命中的字符）。
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "a drawing call takes its box, style and colour; bundling them only moves the list to every call site")]
     pub fn text_marked(
         &mut self,
         s: &str,
@@ -424,7 +427,7 @@ impl Gfx {
     }
 
     /// 画一个单行输入框：选区、文字、光标。光标滚出可见范围时自动跟随。
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "a drawing call takes its box, style and colour; bundling them only moves the list to every call site")]
     pub fn field(
         &mut self,
         tf: &mut TextField,

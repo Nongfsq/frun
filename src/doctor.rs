@@ -80,7 +80,7 @@ pub fn run(args: &[String]) {
         out,
         "\n== main programs vs. Windows records\ninstalled programs inside searched folders: {total}, shown as their own program: {} ({}%)",
         total - wrong.len(),
-        if total == 0 { 100 } else { (total - wrong.len()) * 100 / total }
+        ((total - wrong.len()) * 100).checked_div(total).unwrap_or(100)
     );
     for line in &wrong {
         let _ = writeln!(out, "{line}");
