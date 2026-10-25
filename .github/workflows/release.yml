@@ -22,6 +22,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # checkout fetches the tag as a bare commit, so the annotation (the release notes) is lost; fetch the tag object itself.
+      - name: Release notes from the tag
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          git fetch --force --no-tags --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
+          if [ "$(git cat-file -t "$tag")" != tag ]; then echo "$tag is not an annotated tag: git tag -a $tag -F notes.md"; exit 1; fi
+          git tag -l --format='%(contents)' "$tag" > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then echo "$tag has an empty message"; exit 1; fi
+
       - name: Tag matches Cargo.toml
         shell: pwsh
         run: |
@@ -72,9 +82,11 @@ jobs:
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
+          $notes = "$env:RUNNER_TEMP/notes.md"
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag (Get-ChildItem dist).FullName --clobber
+            gh release edit $tag --notes-file $notes
           } else {
-            gh release create $tag --draft --verify-tag --notes-from-tag --title "frun $($tag.TrimStart('v'))" (Get-ChildItem dist).FullName
+            gh release create $tag --draft --verify-tag --notes-file $notes --title "frun $($tag.TrimStart('v'))" (Get-ChildItem dist).FullName
           }
