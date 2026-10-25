@@ -12,7 +12,7 @@ use crate::{
     textfield::TextField,
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     mem::size_of,
     time::{Duration, Instant},
@@ -517,18 +517,76 @@ pub fn run(updated: Option<String>) -> Result<()> {
     }
 }
 
-/// 借用应用状态执行 `f`。重入时借不到，返回 None。
-pub fn with_app(mut f: impl FnMut(&mut App) -> Option<LRESULT>) -> Option<LRESULT> {
-    APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().and_then(&mut f)))
+thread_local! {
+    /// The (window, message, wParam) that currently holds the app state, for drop traces.
+    static OUTER: Cell<(&'static str, u32, usize)> = const { Cell::new(("", 0, 0)) };
 }
 
-/// 窗口过程会重入（SetWindowPos、ShowWindow 等都会同步派发消息）。
-/// 状态放在 RefCell 里；重入时借不到，就交给默认处理。
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    match with_app(|app| app.on_message(msg, wp, lp)) {
-        Some(r) => r,
-        None => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+/// Runs `f` on the app state for one window message; unhandled messages go to DefWindowProcW.
+/// Window procedures re-enter (SetWindowPos, ShowWindow and the like dispatch synchronously),
+/// and a re-entrant message cannot borrow the state, so it falls back to DefWindowProcW too.
+/// That silently drops whatever the app would have done with it; `trace_drop` records each one.
+pub fn dispatch(
+    window: &'static str,
+    hwnd: HWND,
+    msg: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+    f: impl FnOnce(&mut App) -> Option<LRESULT>,
+) -> LRESULT {
+    let handled = APP.with(|a| {
+        let mut a = a.try_borrow_mut().map_err(|_| ())?;
+        let outer = OUTER.replace((window, msg, wp.0));
+        let r = a.as_mut().and_then(f);
+        OUTER.set(outer);
+        Ok(r)
+    });
+    match handled {
+        Ok(Some(r)) => r,
+        Ok(None) => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+        Err(()) => {
+            trace_drop(window, msg, wp);
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
     }
+}
+
+fn tracing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("FRUN_TRACE").is_some())
+}
+
+/// Appends a line to `%LOCALAPPDATA%\frun\trace.log` when FRUN_TRACE is set.
+fn trace(line: std::fmt::Arguments) {
+    if tracing() {
+        use std::io::Write;
+        let path = config::cache_dir().join("trace.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// Logs a message dropped by re-entrant dispatch: to trace.log under FRUN_TRACE,
+/// and to stderr in debug builds. Message ids are hex; WM_TIMER adds the timer id.
+fn trace_drop(window: &str, msg: u32, wp: WPARAM) {
+    if !tracing() && !cfg!(debug_assertions) {
+        return;
+    }
+    let describe = |window: &str, msg: u32, wp: usize| {
+        let timer = if msg == WM_TIMER { format!(" timer={wp}") } else { String::new() };
+        format!("{window} 0x{msg:04X}{timer}")
+    };
+    let (outer, outer_msg, outer_wp) = OUTER.get();
+    let line = format!("drop {} during {}", describe(window, msg, wp.0), describe(outer, outer_msg, outer_wp));
+    trace(format_args!("{line}"));
+    if cfg!(debug_assertions) {
+        eprintln!("{line}");
+    }
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    dispatch("main", hwnd, msg, wp, lp, |app| app.on_message(msg, wp, lp))
 }
 
 impl App {
@@ -620,13 +678,7 @@ impl App {
         }
         self.frame();
         // 设了 FRUN_TRACE 时记录呼出到第一帧画完用了多久
-        if std::env::var_os("FRUN_TRACE").is_some() {
-            use std::io::Write;
-            let path = config::cache_dir().join("trace.log");
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(f, "show {:.1} ms", began.elapsed().as_secs_f32() * 1000.0);
-            }
-        }
+        trace(format_args!("show {:.1} ms", began.elapsed().as_secs_f32() * 1000.0));
     }
 
     pub fn hide(&mut self) {

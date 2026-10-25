@@ -311,8 +311,5 @@ impl App {
 }
 
 unsafe extern "system" fn menuproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    match with_app(|app| app.menu_message(hwnd, msg, wp, lp)) {
-        Some(r) => r,
-        None => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
-    }
+    dispatch("menu", hwnd, msg, wp, lp, |app| app.menu_message(hwnd, msg, wp, lp))
 }
