@@ -394,6 +394,12 @@ pub fn discover(locations: &[String], dirs: &[String], declined: &[String], syst
     out
 }
 
+/// `discover` compares spellings, and an uninstall record may spell its folder as an 8.3 short path
+/// (c:\progra~1\difx) that matches nothing; the real path gets the same checks before it is added.
+pub fn still_new(real: &str, dirs: &[String], declined: &[String], system: &[String]) -> bool {
+    !dirs.iter().chain(declined).chain(system).any(|d| under(real, d))
+}
+
 /// Windows 登记为系统服务或后台组件（COM 本地服务器）的 exe，小写。
 /// 它们由系统或程序自己调用，双击什么也看不到，不该出现在结果里。
 pub fn background() -> HashSet<String> {
@@ -1152,6 +1158,22 @@ mod tests {
         let declined = vec![r"f:\games".to_string()];
         // Program Files 是系统目录；E:\ 下各装一个，是整个盘；V:\ 已经在范围里；F:\Games 删掉过
         assert_eq!(discover(&homes, &dirs, &declined, &system), [r"d:\software", r"x:\steamlibrary\steamapps\common"]);
+    }
+
+    #[test]
+    fn a_short_path_install_location_is_checked_again_on_its_real_path() {
+        // Driver packages record only DisplayIcon = C:\PROGRA~1\DIFX\<id>\DPInst64.exe (issue #2).
+        let homes = [r"c:\progra~1\difx\a1", r"c:\progra~1\difx\b2"].map(String::from).to_vec();
+        let system = vec![r"c:\program files".to_string()];
+        assert_eq!(discover(&homes, &[], &[], &system), [r"c:\progra~1\difx"]);
+        assert!(!still_new(r"C:\Program Files\DIFX", &[], &[], &system));
+
+        // Already added once, under a folder that is not a system folder.
+        let dirs = vec![r"D:\Drivers\DIFX".to_string()];
+        assert!(!still_new(r"D:\Drivers\DIFX", &dirs, &[], &system));
+        let declined = vec![r"d:\drivers\difx".to_string()];
+        assert!(!still_new(r"D:\Drivers\DIFX", &[], &declined, &system));
+        assert!(still_new(r"D:\Software", &dirs, &declined, &system));
     }
 
     #[test]

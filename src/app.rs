@@ -1201,12 +1201,18 @@ impl App {
     /// 根据 Windows 的安装记录，把程序集中安装的地方自动加进搜索范围。删掉过的不再加。
     /// 有新加的返回 true（配置已保存，还没开始扫描）。
     fn discover_dirs(&mut self) -> bool {
-        let found = scan::discover(&scan::install_locations(), &self.cfg.dirs, &self.cfg.declined, &scan::system_dirs());
+        let system = scan::system_dirs();
+        let found = scan::discover(&scan::install_locations(), &self.cfg.dirs, &self.cfg.declined, &system);
         let mut added = false;
         for dir in found {
             // 用磁盘上的真实大小写显示
             let Ok(real) = std::fs::canonicalize(&dir) else { continue };
             let real = real.to_string_lossy().trim_start_matches(r"\\?\").to_string();
+            // Adding a folder rescans, and every scan runs discovery again: a folder that slips
+            // past `discover` would be added once per scan, forever.
+            if !scan::still_new(&real, &self.cfg.dirs, &self.cfg.declined, &system) {
+                continue;
+            }
             self.cfg.auto_dirs.push(real.clone());
             self.cfg.dirs.push(real);
             added = true;

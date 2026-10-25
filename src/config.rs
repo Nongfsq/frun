@@ -83,6 +83,11 @@ impl Config {
         self.max_rows = self.max_rows.clamp(ROWS_MIN, ROWS_MAX);
         self.cx = self.cx.clamp(0.0, 1.0);
         self.ty = self.ty.clamp(0.0, 1.0);
+        // A discovery loop (issue #2) once appended the same folder thousands of times.
+        for list in [&mut self.dirs, &mut self.auto_dirs] {
+            let mut seen = HashSet::new();
+            list.retain(|d| seen.insert(d.to_lowercase()));
+        }
         self
     }
 }
@@ -290,6 +295,21 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.join("config.toml.bad")).unwrap(), broken);
         assert_eq!(load_from(&dir).language, "en");
         assert_eq!(names(&dir), ["config.toml", "config.toml.bad"]);
+    }
+
+    #[test]
+    fn repeated_folders_are_dropped_on_load() {
+        let dir = crate::testdir::TestDir::new("config-repeated");
+        let difx = r"C:\Program Files\DIFX";
+        let cfg = Config {
+            dirs: vec![r"D:\Tools".into(), difx.into(), difx.to_lowercase(), r"D:\Tools".into(), difx.into()],
+            auto_dirs: vec![difx.into(), difx.into(), difx.into()],
+            ..Config::default()
+        };
+        save_to(&dir, &cfg);
+        let back = load_from(&dir);
+        assert_eq!(back.dirs, [r"D:\Tools", difx]);
+        assert_eq!(back.auto_dirs, [difx]);
     }
 
     #[test]
