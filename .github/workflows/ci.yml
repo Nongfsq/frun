@@ -16,3 +16,4 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: cargo check --locked
       - run: cargo test --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings

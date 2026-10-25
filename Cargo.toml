@@ -13,6 +13,11 @@ toml = { version = "1", default-features = false, features = ["std", "serde", "p
 windows-core = "0.62"
 windows-numerics = "0.3"
 
+[lints.clippy]
+# Clippy's default groups stay on; these join them.
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+
 [build-dependencies]
 embed-resource = "3"
 
