@@ -101,7 +101,7 @@ frun 只找程序，别的都不管。装在哪里的程序都能找到：开始
 
 ## 下载
 
-在 [Releases](https://github.com/Nongfsq/frun/releases/latest) 下载 `frun.exe`，放在任意位置运行就行，需要 Windows 10 或 11。想开机就有，在设置里打开"开机自启"。新版本会自己来：frun 在后台下载，用发布时附上的 SHA-256 核对，下次收起时换上。
+在 [Releases](https://github.com/Nongfsq/frun/releases/latest) 下载 `frun.exe`，放进一个单独的文件夹运行就行，需要 Windows 10 或 11。这个文件夹别放在 AppData 里：清理工具可能把 AppData 清空，"开机自启"就找不到它了。想开机就有，在设置里打开"开机自启"。新版本会自己来：frun 在后台下载，用发布时附上的 SHA-256 核对，下次收起时换上。
 
 exe 目前还没有代码签名，第一次运行时 Windows SmartScreen 可能提示"Windows 已保护你的电脑"。点"更多信息"，再点"仍要运行"。
 

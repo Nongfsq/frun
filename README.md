@@ -101,7 +101,7 @@ One exe of about 2 MB, written in Rust. No installer, no runtime, no web view. M
 
 ## Get it
 
-Download `frun.exe` from [Releases](https://github.com/Nongfsq/frun/releases/latest), put it anywhere you like, and run it. It needs Windows 10 or 11. Turn on *Launch at startup* in Settings if you want it there after a restart. New versions arrive on their own: frun downloads them in the background, checks them against the published SHA-256, and switches over the next time it hides.
+Download `frun.exe` from [Releases](https://github.com/Nongfsq/frun/releases/latest), put it in a folder of its own, and run it. It needs Windows 10 or 11. Keep that folder outside AppData: cleanup tools can empty AppData, and *Launch at startup* would then find nothing to start. Turn on *Launch at startup* in Settings if you want it there after a restart. New versions arrive on their own: frun downloads them in the background, checks them against the published SHA-256, and switches over the next time it hides.
 
 The exe is not code-signed yet, so the first time you run it Windows SmartScreen may say it protected your PC. Choose *More info*, then *Run anyway*.
 
