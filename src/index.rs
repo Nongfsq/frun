@@ -57,6 +57,9 @@ pub struct Entry {
     pub owner: String,
     /// 命令行程序（没有窗口）
     pub console: bool,
+    /// English names from the launch target, `|`-separated: a localized system's
+    /// display names (设置, 注册表编辑器) hide the ones people also type (settings, regedit).
+    pub alias: String,
 }
 
 impl Entry {
@@ -121,6 +124,7 @@ impl Group {
         if cur != self.cur || self.keys.is_empty() {
             self.cur = cur;
             self.keys = keys(&self.members[cur].name);
+            self.keys.extend(alias_keys(&self.members[cur].name, &self.members));
         }
     }
 }
@@ -235,6 +239,7 @@ pub fn read_all() -> Vec<Entry> {
                 resolved: f.next()?.to_string(),
                 owner: f.next().unwrap_or("").to_string(),
                 console: matches!(f.next(), Some("t") | Some("c")),
+                alias: f.next().unwrap_or("").to_string(),
             })
         })
         .collect()
@@ -337,6 +342,50 @@ pub fn keys(name: &str) -> Vec<Key> {
     out
 }
 
+/// Keys from the members' English aliases, only when the shown name is localized:
+/// an English name already matches what people type, and an alias would reorder it.
+/// They mark nothing, since their characters are not in the shown name.
+fn alias_keys(shown: &str, members: &[Entry]) -> Vec<Key> {
+    if !shown.chars().any(|c| c.is_alphabetic() && !c.is_ascii()) {
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    members
+        .iter()
+        .flat_map(|m| m.alias.split('|'))
+        .map(str::to_lowercase)
+        .filter(|a| !a.is_empty() && seen.insert(a.clone()))
+        .map(|a| {
+            let text: Vec<char> = a.chars().collect();
+            Key { map: vec![u16::MAX; text.len()], text }
+        })
+        .collect()
+}
+
+/// Splits an identifier into words so each one counts as a word start:
+/// `SystemSettings` -> `System Settings`, `NVIDIAControlPanel` -> `NVIDIA Control Panel`.
+pub fn words(id: &str) -> String {
+    let chars: Vec<char> = id.chars().collect();
+    let mut out = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_alphanumeric() {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+            continue;
+        }
+        let prev = i.checked_sub(1).map(|j| chars[j]);
+        let next = chars.get(i + 1);
+        let boundary = c.is_uppercase()
+            && prev.is_some_and(|p| p.is_lowercase() || (p.is_uppercase() && next.is_some_and(|n| n.is_lowercase())));
+        if boundary && !out.ends_with(' ') {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +400,7 @@ mod tests {
             resolved: resolved.into(),
             owner: String::new(),
             console: false,
+            alias: String::new(),
         }
     }
 
@@ -407,5 +457,29 @@ mod tests {
         assert_eq!(text(&k[1]), "weixin");
         assert_eq!(k[1].map, [0, 0, 0, 1, 1, 1]);
         assert_eq!(text(&k[2]), "wx");
+    }
+
+    #[test]
+    fn identifiers_split_into_words() {
+        assert_eq!(words("SystemSettings"), "System Settings");
+        assert_eq!(words("NVIDIAControlPanel"), "NVIDIA Control Panel");
+        assert_eq!(words("Windows.Photos"), "Windows Photos");
+        assert_eq!(words("regedit"), "regedit");
+        assert_eq!(words("SecHealthUI"), "Sec Health UI");
+    }
+
+    #[test]
+    fn a_localized_name_also_matches_its_english_alias() {
+        let mut settings = entry("设置", r"shell:AppsFolder\settings", Kind::Store, "");
+        settings.alias = "Immersivecontrolpanel|System Settings".into();
+        let mut regedit = entry("Registry Editor", r"shell:AppsFolder\regedit", Kind::Start, "");
+        regedit.alias = "regedit".into();
+        let mut groups = group(vec![settings, regedit].into_iter());
+        for g in &mut groups {
+            g.choose(&Store::default());
+        }
+        let texts = |g: &Group| g.keys.iter().map(|k| k.text.iter().collect::<String>()).collect::<Vec<_>>();
+        assert!(texts(&groups[0]).contains(&"system settings".to_string()));
+        assert!(!texts(&groups[1]).contains(&"regedit".to_string()));
     }
 }

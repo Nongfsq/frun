@@ -29,7 +29,7 @@ frun looks for programs and nothing else. It finds them wherever they live: the 
 
 ### Type a name, or its pinyin
 
-`wx` finds 微信 (WeChat), `vsc` finds Visual Studio Code. Enter opens the top row; Alt + a number opens that row.
+`wx` finds 微信 (WeChat), `vsc` finds Visual Studio Code. On a Windows set to another language, the English name works too: `reg` finds 注册表编辑器 (Registry Editor). Enter opens the top row; Alt + a number opens that row.
 
 ### One program, one row
 

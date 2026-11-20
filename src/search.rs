@@ -184,6 +184,7 @@ mod tests {
                     resolved: String::new(),
                     owner: String::new(),
                     console: false,
+                    alias: String::new(),
                 }],
                 cur: 0,
                 keys: keys(n),
@@ -227,6 +228,24 @@ mod tests {
         assert_eq!(names(&ix, &store, "co"), ["Codex", "Code"]);
         store.usage.insert("Code".into(), 3);
         assert_eq!(names(&ix, &store, ""), ["Code"]);
+    }
+
+    #[test]
+    fn localized_names_are_found_by_their_english_alias() {
+        let mut ix = index(&["设置", "注册表编辑器", "WSL Settings", "微信"]);
+        ix.groups[0].members[0].alias = "immersivecontrolpanel|System Settings".into();
+        ix.groups[1].members[0].alias = "regedit".into();
+        ix.groups[3].members[0].alias = "Weixin".into();
+        for g in &mut ix.groups {
+            g.keys.clear();
+            g.choose(&Store::default());
+        }
+        let store = Store::default();
+        assert_eq!(names(&ix, &store, "setting"), ["WSL Settings", "设置"]);
+        assert_eq!(names(&ix, &store, "reg"), ["注册表编辑器"]);
+        assert_eq!(names(&ix, &store, "weixin"), ["微信"]);
+        // An alias match marks nothing: its letters are not in the shown name
+        assert!(run(&ix, &store, "reg", 8)[0].marks.iter().all(|m| !m));
     }
 
     #[test]

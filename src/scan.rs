@@ -52,6 +52,8 @@ const PKEY_LINK_TARGET: PROPERTYKEY =
     PROPERTYKEY { fmtid: GUID::from_u128(0xb9b4b3fc_2b51_4a42_b5d8_324146afcf25), pid: 2 };
 const PKEY_LINK_ARGUMENTS: PROPERTYKEY =
     PROPERTYKEY { fmtid: GUID::from_u128(0x436f2667_14e2_4feb_b30a_146c53b5b674), pid: 100 };
+const PKEY_APPUSERMODEL_PACKAGEINSTALLPATH: PROPERTYKEY =
+    PROPERTYKEY { fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3), pid: 15 };
 
 /// 判定重复用的键：目标路径加启动参数。同一个 cmd.exe 配不同参数是不同的程序。
 fn resolved(path: &str, args: &str) -> String {
@@ -148,7 +150,7 @@ pub fn run(args: &[String]) {
         .iter()
         .map(|e| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 e.kind.code(),
                 clean(&e.name),
                 clean(&e.target),
@@ -165,7 +167,8 @@ pub fn run(args: &[String]) {
                     "w"
                 } else {
                     ""
-                }
+                },
+                clean(&e.alias),
             )
         })
         .collect();
@@ -592,6 +595,7 @@ fn walk(
                                     resolved,
                                     owner: String::new(),
                                     console,
+                                    alias: String::new(),
                                 });
                                 progress(total.fetch_add(1, Ordering::Relaxed) + 1);
                             }
@@ -960,21 +964,86 @@ unsafe fn apps(out: &mut Vec<Entry>) -> Result<()> {
             if is_junk(&name, &id) || is_junk(&name, &path) {
                 continue;
             }
+            let resolved = resolved(&path, &prop(&PKEY_LINK_ARGUMENTS));
+            // 打包应用的标识形如 <包族名>!<应用名>
+            let packaged = id.contains('!');
+            let alias = if packaged {
+                let manifest = Path::new(&prop(&PKEY_APPUSERMODEL_PACKAGEINSTALLPATH)).join("AppxManifest.xml");
+                let exe = fs::read_to_string(manifest).map(|m| manifest_exe(&m, &id)).unwrap_or_default();
+                package_alias(&id, &exe)
+            } else {
+                link_alias(&resolved)
+            };
             out.push(Entry {
                 name,
                 target: format!("shell:AppsFolder\\{id}"),
                 workdir: String::new(),
-                // 打包应用的标识形如 <包族名>!<应用名>
-                kind: if id.contains('!') { Kind::Store } else { Kind::Start },
+                kind: if packaged { Kind::Store } else { Kind::Start },
                 root: String::new(),
-                resolved: resolved(&path, &prop(&PKEY_LINK_ARGUMENTS)),
+                resolved,
                 owner: String::new(),
                 console: false,
+                alias,
             });
             progress(out.len());
         }
         Ok(())
     }
+}
+
+/// A shortcut's English alias is its target's file name, unless arguments make the
+/// target a generic host (`cmd.exe /k vcvars.bat`, `rundll32.exe x.ax,config`).
+fn link_alias(resolved: &str) -> String {
+    match resolved.split_once('|') {
+        Some((path, "")) => stem(path).map(index::words).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// A packaged app's English aliases: the package name without its publisher
+/// (`Microsoft.WindowsCalculator` -> `Windows Calculator`), the app's own id when it
+/// says more than `App`, and the manifest's executable (`SystemSettings.exe`).
+fn package_alias(aumid: &str, exe: &str) -> String {
+    let (family, app) = aumid.split_once('!').unwrap_or((aumid, ""));
+    let package = family.split('_').next().unwrap_or("");
+    let segments: Vec<&str> = package.split('.').collect();
+    // Hex ids such as Microsoft.624F8B84B80 name nothing
+    let named = |s: &&str| !s.is_empty() && !(s.chars().all(|c| c.is_ascii_hexdigit()) && s.chars().any(|c| c.is_ascii_digit()));
+    let package = segments.iter().skip(usize::from(segments.len() > 1)).copied().filter(named).collect::<Vec<_>>().join(" ");
+    let app = if app.eq_ignore_ascii_case("app") || app.contains('.') { "" } else { app };
+    let mut out: Vec<String> = Vec::new();
+    for name in [package.as_str(), app, stem(exe).unwrap_or("")] {
+        let name = index::words(name);
+        if !name.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(&name)) {
+            out.push(name);
+        }
+    }
+    out.join("|")
+}
+
+/// The `Executable` of the manifest's `<Application>` whose `Id` is the app part of `aumid`.
+fn manifest_exe(manifest: &str, aumid: &str) -> String {
+    let Some((_, app)) = aumid.split_once('!') else { return String::new() };
+    let attr = |tag: &str, name: &str| {
+        let at = tag.find(&format!(" {name}=\""))? + name.len() + 3;
+        tag[at..].split('"').next().map(str::to_string)
+    };
+    manifest
+        .split("<Application")
+        .skip(1)
+        .filter(|t| t.starts_with(char::is_whitespace))
+        .map(|t| t.split('>').next().unwrap_or("").replace(['\t', '\r', '\n'], " "))
+        .find(|t| attr(t, "Id").is_some_and(|id| id.eq_ignore_ascii_case(app)))
+        .and_then(|t| attr(&t, "Executable"))
+        // Unbuilt templates keep `$targetnametoken$.exe`
+        .filter(|exe| !exe.contains('$'))
+        .unwrap_or_default()
+}
+
+/// File name without folders and extension; None for an empty path.
+fn stem(path: &str) -> Option<&str> {
+    let file = path.rsplit(['\\', '/']).next().filter(|f| !f.is_empty())?;
+    Some(file.rsplit_once('.').map_or(file, |(s, _)| s))
 }
 
 unsafe fn take(p: Result<PWSTR>) -> Result<String> {
@@ -1248,5 +1317,30 @@ mod tests {
         assert_eq!(own_name(aomei, r"d:\tools\aomei partition assistant\ss.exe"), "AOMEI Partition Assistant");
         let fluent = "软件 - Fluent Search - 快速启动工具。 - utility - fluent search - 工具";
         assert_eq!(own_name(fluent, r"d:\software\fluent search\fluentsearch.exe"), "Fluent Search");
+    }
+
+    #[test]
+    fn a_shortcut_without_arguments_is_also_known_by_its_file_name() {
+        assert_eq!(link_alias(r"c:\windows\regedit.exe|"), "regedit");
+        assert_eq!(link_alias(r"c:\windows\system32\services.msc|"), "services");
+        assert_eq!(link_alias(r"c:\windows\system32\cmd.exe|/k vcvars.bat"), "");
+        assert_eq!(link_alias(""), "");
+    }
+
+    #[test]
+    fn a_packaged_app_is_also_known_by_its_package_and_executable() {
+        let manifest = r#"<Package><Applications>
+            <Application Id="other" Executable="Other.exe"/>
+            <Application
+              Id="microsoft.windows.immersivecontrolpanel" Executable="SystemSettings.exe" EntryPoint="x">
+            </Application></Applications></Package>"#;
+        let settings = "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel";
+        assert_eq!(manifest_exe(manifest, settings), "SystemSettings.exe");
+        assert_eq!(package_alias(settings, "SystemSettings.exe"), "immersivecontrolpanel|System Settings");
+        let calc = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
+        assert_eq!(manifest_exe(manifest, calc), "");
+        assert_eq!(package_alias(calc, "CalculatorApp.exe"), "Windows Calculator|Calculator App");
+        assert_eq!(package_alias("Microsoft.624F8B84B80_8wekyb3d8bbwe!Forzahorizon5", ""), "Forzahorizon5");
+        assert_eq!(package_alias("Claude_pzs8sxrjxfjjc!Claude", "app\\Claude.exe"), "Claude");
     }
 }

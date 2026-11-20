@@ -1025,6 +1025,7 @@ impl App {
                     resolved: String::new(),
                     owner: String::new(),
                     console: false,
+                    alias: String::new(),
                 }],
                 cur: 0,
                 keys: Vec::new(),
